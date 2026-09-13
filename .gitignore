@@ -1,0 +1,16 @@
+build/
+*.uf2
+*.elf
+*.bin
+*.hex
+*.ihx
+*.rel
+*.lst
+*.rst
+*.sym
+*.map
+*.mem
+__pycache__/
+*.pyc
+.venv/
+captures/
