@@ -37,12 +37,34 @@ Both problems are solved in the format rather than by cross-channel timing:
 
 **1. Shared serial number.** The RP2350 derives a serial string from its flash unique ID and
 patches it into the FX2 descriptors when it serves the boot image. Host pairing is then a
-string match. Hub topology (the CH334 port numbers are fixed on the PCB) is a fallback, not
+string match on `35F0:DB12` and `35F0:DB13` with equal serials. Hub topology (the CH334 port numbers are fixed on the PCB) is a fallback, not
 the primary mechanism.
 
 **2. Self-describing stream.** Session ID, block sequence, timestamps and inline overrun
 records mean the host never correlates the channels in time. It reads the stream and knows
 exactly what it has.
+
+## USB identity
+
+Bitcraze VID **0x35F0**. One PID per chip, because each enumerates as its own device behind
+the CH334 hub:
+
+| Device | VID:PID | Interface | Serial |
+|---|---|---|---|
+| RP2040 — 3× CMSIS-DAP probe | `35F0:DB11` | CMSIS-DAP v2 (+ CDC) | own flash unique ID |
+| RP2350 — control plane | `35F0:DB12` | CDC (v0); vendor later | flash unique ID |
+| CBM9002A — capture stream | `35F0:DB13` | vendor, bulk IN EP6 | **RP2350's** flash unique ID |
+
+The FX2 deliberately reports the **RP2350's** serial, not one of its own — it has no unique ID
+and no non-volatile storage, and matching serials is how the host pairs the control channel
+with the data channel. The RP2350 patches the string into the boot image it serves.
+
+Two identities that are not ours and will show up during bring-up:
+
+- **`04B4:8613`** — the FX2's boot ROM, when no EEPROM answers at 0xA2. This is the expected
+  state in stage 0c and while RAM-loading with `fx2tool`.
+- **`2E8A:000F`** — the RP2350 bootrom in BOOTSEL. Note that the FX2 disappears entirely in
+  this state, because nothing is holding its boot image.
 
 ## Capture stream
 
@@ -113,8 +135,6 @@ reject stale blocks unambiguously even though the two channels are unordered.
   small patch table generated at build time. Decide before descriptors are written.
 - **CDC vs vendor on the RP2350.** CDC is easier to debug; a vendor interface with MS OS
   descriptors gives one WinUSB backend for both devices. Possibly both, as a composite.
-- **VID/PID allocation** for the RP2350 device *and* the FX2 device. Blocks descriptor work
-  on both sides.
 - **Compression.** 8 bits/sample at 24 Msps is 24 MB/s of mostly idle. RLE or edge-plus-delta
   encoding in PIO/DMA is the obvious next step, but it is not needed to prove the hardware —
   keep v0 raw.

@@ -72,8 +72,9 @@ Implemented: sync slave FIFO init, EP6 bulk IN 512 quad-buffered, AUTOIN, vendor
 descriptors, MS OS 1.0 `WINUSB`, and `tools/mkc2.py` (tested against libfx2's own
 `boot-cypress.ihex`).
 
-Not yet: real VID/PID (placeholder is pid.codes' test PID `1209:0001`), and the serial-string
-patching the RP2350 will do — the placeholder `BSLYSERIAL000000` and its offset in the
-generated header are in place, but nothing writes to it.
+USB identity is **`35F0:DB13`**.
+
+Not yet: the serial-string patching the RP2350 will do — the placeholder `BSLYSERIAL000000`
+and its offset in the generated header are in place, but nothing writes to it.
 
 See [../docs/bringup-plan.md](../docs/bringup-plan.md) stage 1.

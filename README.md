@@ -41,6 +41,13 @@ Design notes: Obsidian `Projects/Bugslayer/Deck/`.
   its slave FIFO; they come out of a bulk IN endpoint on the PC at up to ~25 MB/s. The 8051
   runs ~30 lines of setup at boot and is then out of the data path entirely.
 
+## USB identity
+
+Bitcraze VID **0x35F0**, one PID per chip: **DB11** RP2040 probe, **DB12** RP2350 control
+plane, **DB13** FX2 capture stream. The FX2 reports the *RP2350's* serial number, which is how
+the host pairs the two channels. Full table and the bring-up identities in
+[docs/protocol.md](docs/protocol.md).
+
 ## Layout
 
 | Directory | What | Toolchain |

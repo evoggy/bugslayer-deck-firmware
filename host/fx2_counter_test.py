@@ -24,10 +24,13 @@ except ImportError:
     sys.exit("libusb1 is required: pip install libusb1")
 
 # Bring-up default: with the RP2350 silent on I2C the FX2 falls back to its
-# ROM identity and the firmware is RAM-loaded with fx2tool. Once the boot
-# image comes from the emulated EEPROM this becomes our own VID/PID.
+# ROM identity and the firmware is RAM-loaded with fx2tool. Once the boot image
+# comes from the emulated EEPROM it enumerates as 35F0:DB13 instead --
+# pass `--ours` for that.
 DEFAULT_VID = 0x04B4
 DEFAULT_PID = 0x8613
+BSLY_VID = 0x35F0
+BSLY_PID_FX2 = 0xDB13
 
 EP_IN = 0x86
 XFER_SIZE = 64 * 1024
@@ -67,7 +70,11 @@ def main():
     p.add_argument("--pid", type=lambda s: int(s, 0), default=DEFAULT_PID)
     p.add_argument("--duration", type=float, default=10.0, help="seconds")
     p.add_argument("--serial", help="only match this iSerialNumber")
+    p.add_argument("--ours", action="store_true",
+                   help=f"look for {BSLY_VID:04x}:{BSLY_PID_FX2:04x} instead of the FX2 ROM ID")
     args = p.parse_args()
+    if args.ours:
+        args.vid, args.pid = BSLY_VID, BSLY_PID_FX2
 
     checker = Checker()
     inflight = [0]

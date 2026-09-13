@@ -9,6 +9,9 @@ hub. Per-port CONNECTED/RUNNING LEDs plus a USB LED.
 | SWD2 | CLK, IO, NRST, **SWO** | `LED2_CONNECTED`, `LED2_RUNNING` |
 | SWD3 | CLK, IO, NRST (no SWO) | `LED3_CONNECTED`, `LED3_RUNNING` |
 
+USB identity: **`35F0:DB11`**. Serial is this RP2040's own flash unique ID — it does not share
+the RP2350's, since it is a debug probe rather than half of the capture path.
+
 ## Open question: how do three DAPs appear to the host?
 
 The LEDs imply three *simultaneously usable* ports, which does not map cleanly onto CMSIS-DAP.

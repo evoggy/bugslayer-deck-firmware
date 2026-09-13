@@ -13,7 +13,7 @@ include $(LIBFX2)/fx2rules.mk
 
 # C2 EEPROM image + a C array for the RP2350 build.
 c2: $(TARGET).ihex
-	python3 tools/mkc2.py --vid 0x1209 --pid 0x0001 \
+	python3 tools/mkc2.py --vid 0x35F0 --pid 0xDB13 \
 		--header build/fx2_image.h $(TARGET).ihex build/$(TARGET).c2
 
 .PHONY: c2

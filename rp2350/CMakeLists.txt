@@ -31,4 +31,13 @@ target_link_libraries(bugslayer_deck
 pico_enable_stdio_usb(bugslayer_deck 1)
 pico_enable_stdio_uart(bugslayer_deck 0)
 
+# USB identity. The serial string is already the flash unique ID, which is what
+# the host uses to pair this device with the deck's FX2 (docs/protocol.md).
+target_compile_definitions(bugslayer_deck PRIVATE
+    USBD_VID=0x35F0
+    USBD_PID=0xDB12
+    USBD_MANUFACTURER="Bitcraze AB"
+    USBD_PRODUCT="Bugslayer deck control"
+)
+
 pico_add_extra_outputs(bugslayer_deck)

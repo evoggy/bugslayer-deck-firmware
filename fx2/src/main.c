@@ -13,10 +13,10 @@
 #include <fx2usb.h>
 #include <usbmicrosoft.h>
 
-// TODO: allocate real IDs. 1209:0001 is pid.codes' test PID and must not ship.
-// The Crazyflie itself uses Nordic's VID (1915), which may be the precedent.
-#define USB_VID 0x1209
-#define USB_PID 0x0001
+// Bitcraze VID; PID DB13 is the deck's FX2. DB11 is the RP2040 probe and
+// DB12 the RP2350 control plane -- see ../../docs/protocol.md.
+#define USB_VID 0x35F0
+#define USB_PID 0xDB13
 
 // Windows caches the MS OS descriptor answer per VID/PID/bcdDevice. Bump the
 // low byte on every descriptor change during development or you will chase a
