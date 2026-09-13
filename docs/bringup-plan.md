@@ -42,47 +42,52 @@ it before anyone writes 8051 code.
 No Crazyflie, no sniffing. Just: can the RP2350 push bytes through the FX2 to the PC without
 losing any?
 
-**RP2350 side.** A PIO write engine on GP32–43 plus a DMA ring fed with a **32-bit incrementing
-counter**. A 32-bit counter (not a byte pattern) is the point — it makes loss *quantifiable*,
-not just detectable.
+**RP2350 side.** ✅ Implemented: `rp2350/pio/fx2_write.pio` + `rp2350/src/fx2_link.c`.
+A PIO write engine on GP32–43 plus two DMA channels ping-ponging 8 KiB buffers filled with a
+**32-bit little-endian incrementing counter**. A 32-bit counter rather than a byte pattern is
+the point — it makes loss *quantifiable*, not merely detectable.
 
-Sketch of the write SM (base 16, 1-bit side-set on IFCLK, `jmp pin` = FLAGB):
+The engine is eight `clk_sys` cycles per IFCLK period (4 low, 4 high), so **18.75 MB/s at the
+stock 150 MHz**, with these margins against the CBM9002A datasheet p.17 numbers:
 
-```
-; clk_sys 150 MHz, /6 → IFCLK 25 MHz, 3 cycles low + 3 cycles high.
-; FD and SLWR are driven on the FALLING edge, ~20 ns before the rising edge the
-; FX2 samples on. That clears tSWR 12.1 ns and tSFD 3.2 ns with margin.
-.wrap_target
-    jmp pin, write   side 0 [1]   ; FLAGB high = room in EP6
-    nop              side 1 [2]   ; full: idle the clock, SLWR stays deasserted
-    jmp check        side 0 [1]
-write:
-    out pins, 8      side 0 [2]   ; drive FD0-7 + assert SLWR
-    nop              side 1 [2]   ; FX2 samples here
-.wrap
-```
+| | Required | At 150 MHz |
+|---|---|---|
+| tSFD — FD setup | ≥ 3.2 ns | 26.7 ns |
+| tSWR — SLWR# setup | ≥ 12.1 ns | 20.0 ns |
+| tFDH / tWRH — hold | ≥ 4.5 / 3.6 ns | 26.7 ns |
+| tXFLG — FLAGB valid | ≤ 13.5 ns | sampled at 20.0 ns |
+| tIFCLK — period | 20.83–200 ns | 53.3 ns |
 
-⚠️ Untested, and the SLWR/PKTEND bits are elided — SLWR probably wants to come from the same
-`out` as the data (9 bits from a pre-shifted word) rather than `set`, to keep the loop at
-6 cycles. Treat the sketch as the shape, not the answer. The timing numbers it has to meet are
-in the CBM9002A datasheet p.17 and are identical to Cypress's.
+Three entry points share one program: `clk_only` (a clock that cannot stall, used from `fx2 up`
+until the first `arm`), `stall` (EP6 full — keep clocking, SLWR# deasserted) and `write`.
+Switching between them is a `pio_sm_exec` of a `jmp`. A stalled `out` freezes the clock, which
+is safe *after* the FX2 has configured itself — see docs/hardware.md.
 
-**FX2 side.** The minimal AUTOIN firmware from Obsidian `Deck/FX2 firmware.md` — ~30 lines of
-register init plus descriptors, built with SDCC + libfx2, Glasgow's `firmware/fx2/` as the
-reference.
+⚠️ 18.75 MB/s is a deliberately conservative first cut. A tighter loop is possible once the
+link is proven; do not optimise before stage 1.3 passes.
 
-**Host side.** `host/fx2_counter_test.py`: open the bulk IN endpoint, read, verify the counter
-is monotonic with no gaps, print MB/s.
+**FX2 side.** ✅ Implemented: `fx2/src/main.c`. ~30 lines of register init plus a descriptor
+set with the MS OS 1.0 `WINUSB` compat ID, built with SDCC against libfx2 (submodule). Needs
+`sdcc` installed, which is the real cost of this firmware — the code is trivial.
+
+⚠️ It is **sync-only**. The async fallback mentioned below is a one-line `IFCONFIG` change
+(`|_ASYNC`) plus a different PIO program, not something the current build can switch to at
+runtime.
+
+**Host side.** ✅ Implemented: `host/fx2_counter_test.py`. Queued async libusb transfers (16 ×
+64 KiB in flight — a synchronous read loop tops out below the link rate and would report false
+failures), verifying the counter and reporting exactly how many bytes went missing where.
 
 **Walk the ladder — this is the FX2 risk test:**
 
 | Step | Mode | Expected |
 |---|---|---|
-| 1.1 | RAM-load the firmware with `fx2tool`, **async** slave FIFO | ~8 MB/s, no gaps |
-| 1.2 | **sync, external IFCLK at 6 MHz** | ~6 MB/s, no gaps — **go/no-go for the clone** |
-| 1.3 | sync, external IFCLK at 25 MHz | ~25 MB/s, no gaps |
+| 1.1 | RAM-load with `fx2tool`, `clk 6000000` | ~6 MB/s, no gaps — **go/no-go for the clone's external-IFCLK path** |
+| 1.2 | `clk 18750000` (clkdiv 1, the engine's native rate) | ~18.7 MB/s, no gaps |
+| 1.3 | tighten the PIO loop and/or raise `clk_sys` | toward 25 MB/s |
 
-→ *Pass: 60 s at ≥ 20 MB/s with zero sequence gaps.*
+→ *Pass: 60 s with **zero sequence gaps** at 18.75 MB/s. Throughput is reported, not asserted —
+correctness first, then optimise.*
 
 RAM-loading with `fx2tool` (or `fx2pipe`) means the RP2350 does not need EEPROM emulation yet
 and the edit-test loop is seconds, not a reflash. Keep the RP2350 silent on I²C so the FX2

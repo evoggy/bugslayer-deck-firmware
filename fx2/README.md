@@ -30,11 +30,19 @@ Gotchas that will cost an afternoon each:
 cleared · `PINFLAGSAB = 0xE0` for FLAGB = EP6 FF · bump `bcdDevice` on every descriptor change
 during development, because Windows caches the MS-OS-descriptor answer per VID/PID/bcdDevice.
 
-## Toolchain
+## Build
 
-SDCC (`sdcc`, `sdas8051`, `sdobjcopy`) + libfx2. Output is an Intel HEX plus a C2 EEPROM image;
-`tools/` converts the C2 image to a C array for the RP2350 build, which is committed so the
-RP2350 firmware builds without SDCC.
+libfx2 is a submodule (`git submodule update --init`). Needs `sdcc`:
+
+```
+make            # -> bugslayer-fx2.ihex
+make load       # RAM-load over USB with fx2tool (device is still 04B4:8613)
+make c2         # -> build/bugslayer-fx2.c2 and build/fx2_image.h
+```
+
+`tools/mkc2.py` is standalone — it parses the Intel HEX and emits the C2 image itself, so the
+RP2350 build never needs SDCC or libfx2's Python. `--mode c0` emits the 8-byte header-only
+image for development (our VID/PID, host RAM-loads the firmware).
 
 ## Boot
 
@@ -57,4 +65,15 @@ tools/    C2 image → C array for the RP2350 build
 
 ## Status
 
-Not started. See [../docs/bringup-plan.md](../docs/bringup-plan.md) stage 1.
+Written, **not compiled** — there is no SDCC on the machine this was authored on, so expect to
+fix a syntax slip or two on first build. Nothing has run on hardware.
+
+Implemented: sync slave FIFO init, EP6 bulk IN 512 quad-buffered, AUTOIN, vendor-class
+descriptors, MS OS 1.0 `WINUSB`, and `tools/mkc2.py` (tested against libfx2's own
+`boot-cypress.ihex`).
+
+Not yet: real VID/PID (placeholder is pid.codes' test PID `1209:0001`), and the serial-string
+patching the RP2350 will do — the placeholder `BSLYSERIAL000000` and its offset in the
+generated header are in place, but nothing writes to it.
+
+See [../docs/bringup-plan.md](../docs/bringup-plan.md) stage 1.

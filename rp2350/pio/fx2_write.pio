@@ -1,0 +1,86 @@
+;
+; FX2 slave FIFO write engine — RP2350 is the IFCLK master.
+;
+; Pins (real GP numbers; the SDK translates for the PIO GPIO base of 16):
+;   OUT  base GP32, 8 pins : FD0..FD7
+;   SET  base GP41, 2 pins : bit0 = SLWR#, bit1 = PKTEND#   (both active LOW)
+;   side-set  GP40         : IFCLK
+;   JMP pin   GP43         : FLAGB — EP6 full flag, active low, so HIGH = room
+;
+; Eight clk_sys cycles per IFCLK period: 4 low, 4 high. At clk_sys = 150 MHz and
+; clkdiv = 1 that is IFCLK 18.75 MHz -> 18.75 MB/s. tIFCLK must stay inside
+; 20.83..200 ns (CBM9002A datasheet p.17, identical to the Cypress FX2LP spec).
+;
+; Timing at 150 MHz, measured against the rising edge the FX2 samples on:
+;   FD driven      4 cyc = 26.7 ns before   (tSFD  >= 3.2 ns)   OK
+;   SLWR# asserted 3 cyc = 20.0 ns before   (tSWR  >= 12.1 ns)  OK
+;   FD/SLWR# held  4 cyc = 26.7 ns after    (tFDH  >= 4.5 ns)   OK
+;   FLAGB sampled  3 cyc = 20.0 ns after    (tXFLG <= 13.5 ns)  OK
+;
+; A stalled OUT (empty TX FIFO) freezes the SM with IFCLK low and SLWR# still
+; asserted from the previous word. That is safe: with no rising edge the FX2
+; latches nothing, and it does no register writes of its own after boot. IFCLK
+; only has to be *running before the FX2 firmware configures its FIFO
+; registers*, i.e. before FX_RESET# is released — which `clk_only` guarantees.
+
+.program fx2_write
+.side_set 1
+
+; Clock-only loop. No OUT, no data, cannot stall. This is what runs from
+; `fx2 up` until the first `arm`, and again after `disarm`.
+public clk_only:
+    nop                side 0 [3]      ; 4 cyc low
+    jmp clk_only       side 1 [3]      ; 4 cyc high   -> 8 cyc
+
+; EP6 is full: keep clocking, SLWR# deasserted, re-check every period.
+.wrap_target
+public stall:
+    set pins, 0b11     side 0 [3]      ; 4 cyc low  : SLWR#=1, PKTEND#=1
+    nop                side 1 [2]      ; 3 cyc high
+    jmp pin, write     side 1          ; 1 cyc high : room in EP6?
+.wrap                                  ; still full -> stall (free wrap)
+
+; Streaming.
+write:
+    out pins, 8        side 0          ; 1 cyc low  : new FD on the falling edge
+    set pins, 0b10     side 0 [2]      ; 3 cyc low  : SLWR# asserted
+    nop                side 1 [2]      ; 3 cyc high : FX2 samples on the rising edge
+    jmp pin, write     side 1          ; 1 cyc high : still room -> next word
+    jmp stall          side 0          ; full: one extra low cycle (9-cyc period, legal)
+
+% c-sdk {
+#include "hardware/clocks.h"
+
+// gpio_base for the PIO instance must be 16 before calling this.
+static inline void fx2_write_program_init(PIO pio, uint sm, uint offset,
+                                          uint pin_fd0,     // GP32
+                                          uint pin_ifclk,   // GP40
+                                          uint pin_slwr,    // GP41 (PKTEND# = +1)
+                                          uint pin_flagb,   // GP43
+                                          float clkdiv) {
+    for (uint i = 0; i < 8; i++) pio_gpio_init(pio, pin_fd0 + i);
+    pio_gpio_init(pio, pin_ifclk);
+    pio_gpio_init(pio, pin_slwr);
+    pio_gpio_init(pio, pin_slwr + 1);
+    gpio_set_input_enabled(pin_flagb, true);
+
+    pio_sm_set_consecutive_pindirs(pio, sm, pin_fd0, 8, true);
+    pio_sm_set_consecutive_pindirs(pio, sm, pin_ifclk, 3, true);   // IFCLK, SLWR#, PKTEND#
+    pio_sm_set_consecutive_pindirs(pio, sm, pin_flagb, 1, false);
+
+    pio_sm_config c = fx2_write_program_get_default_config(offset);
+    sm_config_set_out_pins(&c, pin_fd0, 8);
+    sm_config_set_set_pins(&c, pin_slwr, 2);
+    sm_config_set_sideset_pins(&c, pin_ifclk);
+    sm_config_set_jmp_pin(&c, pin_flagb);
+    sm_config_set_out_shift(&c, true /*shift_right*/, true /*autopull*/, 32);
+    sm_config_set_fifo_join(&c, PIO_FIFO_JOIN_TX);
+    sm_config_set_clkdiv(&c, clkdiv);
+
+    pio_sm_init(pio, sm, offset + fx2_write_offset_clk_only, &c);
+
+    // Park SLWR#/PKTEND# high before the SM starts driving them; the PIO output
+    // register powers up at 0, which would assert both.
+    pio_sm_exec(pio, sm, pio_encode_set(pio_pins, 0b11));
+}
+%}

@@ -18,33 +18,37 @@ Each PIO block sees a **32-pin window**, either GP0–31 or GP16–47, selected 
 | GP0–15 | control / housekeeping | never sniffed |
 
 Put the capture SM and the FX2 write SM on the **same block at base 16** and both are
-reachable. With base 16, PIO pin indices are `GPn - 16`:
+reachable.
 
-- capture group GP16–23 → PIO pins **0–7**
-- FX2 bus GP32–43 → PIO pins **16–27**
+**You do not do the base arithmetic yourself.** On RP2350B the SDK defaults
+`PICO_PIO_USE_GPIO_BASE` to 1, and then every `sm_config_set_*_pins()` and
+`pio_sm_set_consecutive_pindirs()` call takes a **real GP number in 0–47** and translates
+internally. `pio_sm_init()` returns `PICO_ERROR_BAD_ALIGNMENT` if the resulting configuration
+cannot fit one 32-pin window. So the base-16 constraint is real, but it is a validity check,
+not pin maths in your code.
 
 ## CF expansion signals — GP16–31
 
-| GP | PIO idx (base 16) | CF pin | Signal | HW peripheral |
-|---|---|---|---|---|
-| GP16 | 0 | P2.4 | MISO | `spi0_rx` |
-| GP17 | 1 | P1.7 | IO_1 | (`spi0_ss_n`) |
-| GP18 | 2 | P2.5 | SCK | `spi0_sclk` |
-| GP19 | 3 | P2.3 | MOSI | `spi0_tx` |
-| GP20 | 4 | P1.8 | IO_2 | — |
-| GP21 | 5 | P1.9 | IO_3 | — |
-| GP22 | 6 | P1.10 | IO_4 | — |
-| GP23 | 7 | P2.10 | OW | — (1-Wire deck ID) |
-| GP24 | 8 | P1.5 | SDA | `i2c0_sda` |
-| GP25 | 9 | P1.6 | SCL | `i2c0_scl` |
-| GP26 | 10 | mux 2D+ | EXT_TX2 | `uart1_tx` (AUX) |
-| GP27 | 11 | mux 2D− | EXT_RX2 | `uart1_rx` (AUX) |
-| GP28 | 12 | P1.4 | TX1 | `uart0_tx` |
-| GP29 | 13 | P1.3 | RX1 | `uart0_rx` |
-| GP30 | 14 | P2.8 | N_IO_1 | — |
-| GP31 | 15 | P2.9 | N_IO_2 | — |
+| GP | CF pin | Signal | HW peripheral |
+|---|---|---|---|
+| GP16 | P2.4 | MISO | `spi0_rx` |
+| GP17 | P1.7 | IO_1 | (`spi0_ss_n`) |
+| GP18 | P2.5 | SCK | `spi0_sclk` |
+| GP19 | P2.3 | MOSI | `spi0_tx` |
+| GP20 | P1.8 | IO_2 | — |
+| GP21 | P1.9 | IO_3 | — |
+| GP22 | P1.10 | IO_4 | — |
+| GP23 | P2.10 | OW | — (1-Wire deck ID) |
+| GP24 | P1.5 | SDA | `i2c0_sda` |
+| GP25 | P1.6 | SCL | `i2c0_scl` |
+| GP26 | mux 2D+ | EXT_TX2 | `uart1_tx` (AUX) |
+| GP27 | mux 2D− | EXT_RX2 | `uart1_rx` (AUX) |
+| GP28 | P1.4 | TX1 | `uart0_tx` |
+| GP29 | P1.3 | RX1 | `uart0_rx` |
+| GP30 | P2.8 | N_IO_1 | — |
+| GP31 | P2.9 | N_IO_2 | — |
 
-**GP16–23 is the money group.** One `in pins, 8` from PIO pin 0 captures MISO, SCK, MOSI,
+**GP16–23 is the money group.** One `in pins, 8` from GP16 captures MISO, SCK, MOSI,
 *all four* CS candidates and OW as one byte per sample. CS is not fixed to IO_1 — it varies
 by deck — so capturing all four and masking in software is the only option that works
 across decks, and transaction framing needs CS anyway.
@@ -55,13 +59,13 @@ the same pin.
 
 ## FX2 slave FIFO — GP32–43
 
-| GP | PIO idx | FX2 signal | Direction | Notes |
-|---|---|---|---|---|
-| GP32–39 | 16–23 | FD0–FD7 | RP2350 → FX2 | contiguous, one `out pins, 8` |
-| GP40 | 24 | IFCLK | RP2350 → FX2 | **RP2350 is clock master**, side-set |
-| GP41 | 25 | SLWR | RP2350 → FX2 | write strobe, active low |
-| GP42 | 26 | PKTEND | RP2350 → FX2 | commit a short packet, active low |
-| GP43 | 27 | FLAGB | FX2 → RP2350 | EP6 full flag, **active low** (`jmp pin`) |
+| GP | FX2 signal | Direction | Notes |
+|---|---|---|---|
+| GP32–39 | FD0–FD7 | RP2350 → FX2 | contiguous, one `out pins, 8` |
+| GP40 | IFCLK | RP2350 → FX2 | **RP2350 is clock master**, side-set |
+| GP41 | SLWR | RP2350 → FX2 | write strobe, active low |
+| GP42 | PKTEND | RP2350 → FX2 | commit a short packet, active low |
+| GP43 | FLAGB | FX2 → RP2350 | EP6 full flag, **active low** (`jmp pin`) |
 
 Strapped in hardware, not firmware: FIFOADR = EP6 (`FIFOADR1=1, FIFOADR0=0`), SLRD and SLOE
 tied inactive. The link is IN-only.
@@ -69,10 +73,14 @@ tied inactive. The link is IN-only.
 ⚠️ **FLAGB low means full.** `jmp pin` branches when the pin is *high*, i.e. when there is
 room. Easy to get backwards.
 
-⚠️ **IFCLK must be free-running before `FX_RESET#` is released and must never stop while the
-FX2 is out of reset.** With `IFCLKSRC=0` the FX2's FIFO register block is clocked from that
-pin; if it stops, the 8051 hangs on the next register write. The PIO program idles the clock
-and deasserts SLWR — it does not gate the clock.
+⚠️ **IFCLK must be running before the FX2's firmware configures its FIFO registers**, i.e.
+before `FX_RESET#` is released. With `IFCLKSRC=0` that register block is clocked from GP40, and
+the 8051 hangs on a register write if the clock is dead. `fx2_write.pio` handles this with a
+`clk_only` loop that runs from `fx2 up` onward.
+
+Once the FX2 is configured it does no further register writes, so a **stalled** write engine
+freezing IFCLK is benign: with no rising edge nothing is latched, and SLWR# simply holds. The
+rule is about boot ordering, not about keeping the clock alive forever.
 
 ## Control / housekeeping — GP0–15
 

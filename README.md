@@ -83,11 +83,12 @@ captures on its own.
 
 ## Status
 
-Nothing is implemented yet. The board has not been fabricated.
+The board has not been fabricated, so **none of this has run on hardware**. Everything below
+compiles and is ready for stage 0/1 of the bring-up plan.
 
 | Firmware | Status |
 |---|---|
-| `rp2350/` | not started |
-| `rp2040/` | not started |
-| `fx2/` | not started — design in Obsidian `Deck/FX2 firmware.md` |
-| `host/` | not started |
+| `rp2350/` | stage 0 + 1 — CDC command loop, FX2 link, PIO write engine, counter DMA. **Builds clean** |
+| `rp2040/` | not started; USB topology question open |
+| `fx2/` | stage 1 — slave FIFO + WinUSB descriptors. **Not compiled** (no SDCC installed here) |
+| `host/` | `fx2_counter_test.py` done; needs `pip install libusb1` |

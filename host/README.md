@@ -21,4 +21,7 @@ does not exist until RP2350 firmware releases `FX_RESET#`. Wait and retry.
 
 ## Status
 
-Not started.
+`fx2_counter_test.py` is written and its stream checker is unit-tested (clean stream, injected
+gap, and the 2³² wrap). It has never talked to hardware. `pip install libusb1`.
+
+The rest are not started.
