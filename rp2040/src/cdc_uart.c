@@ -98,7 +98,8 @@ void cdc_uart_core2( void* ptr)
 
 void cdc_uart_init(struct CDCUartInstance_t* uart, const struct UartProfile_t* profile) 
 {
-  if(!profile)
+  // A profile with no RX pin leaves the CDC port unbound
+  if(!profile || profile->rxPin == -1)
     return;
 
   lock_hw_uart();
@@ -127,7 +128,8 @@ void cdc_uart_init(struct CDCUartInstance_t* uart, const struct UartProfile_t* p
 
   memset(uart->matchKeyStates, 0, sizeof(uart->matchKeyStates)); 
   gpio_set_function(uart->rxPin, GPIO_FUNC_UART);
-  gpio_set_function(uart->txPin, GPIO_FUNC_UART);
+  if(uart->txPin != -1)
+    gpio_set_function(uart->txPin, GPIO_FUNC_UART);
   gpio_set_pulls(uart->rxPin, 1, 0);   
   uart_init(uart->uart, uart->baud);
 

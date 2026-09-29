@@ -179,10 +179,10 @@ static uint32_t DAP_HostStatus(uint32_t probeId, const uint8_t *request, uint8_t
 
   switch (*request) {
     case DAP_DEBUGGER_CONNECTED:
-      LED_CONNECTED_OUT((*(request+1) & 1U));
+      LED_CONNECTED_OUT(probeId, (*(request+1) & 1U));
       break;
     case DAP_TARGET_RUNNING:
-      LED_RUNNING_OUT((*(request+1) & 1U));
+      LED_RUNNING_OUT(probeId, (*(request+1) & 1U));
       break;
     default:
       *response = DAP_ERROR;
@@ -295,7 +295,7 @@ static uint32_t DAP_SWJ_Pins(uint32_t probeId, const uint8_t *request, uint8_t *
     PIN_nTRST_OUT(value >> DAP_SWJ_nTRST);
   }
   if ((select & (1U << DAP_SWJ_nRESET)) != 0U){
-    PIN_nRESET_OUT(value >> DAP_SWJ_nRESET);
+    PIN_nRESET_OUT(probeId, value >> DAP_SWJ_nRESET);
   }
 
   if (wait != 0U) {
@@ -334,7 +334,7 @@ static uint32_t DAP_SWJ_Pins(uint32_t probeId, const uint8_t *request, uint8_t *
         }
       }
       if ((select & (1U << DAP_SWJ_nRESET)) != 0U) {
-        if ((value >> DAP_SWJ_nRESET) ^ PIN_nRESET_IN()) {
+        if ((value >> DAP_SWJ_nRESET) ^ PIN_nRESET_IN(probeId)) {
           continue;
         }
       }
@@ -347,7 +347,7 @@ static uint32_t DAP_SWJ_Pins(uint32_t probeId, const uint8_t *request, uint8_t *
           (PIN_TDI_IN()       << DAP_SWJ_TDI)       |
           (PIN_TDO_IN()       << DAP_SWJ_TDO)       |
           (PIN_nTRST_IN()     << DAP_SWJ_nTRST)     |
-          (PIN_nRESET_IN()    << DAP_SWJ_nRESET);
+          (PIN_nRESET_IN(probeId)    << DAP_SWJ_nRESET);
 
   *response = (uint8_t)value;
 #else

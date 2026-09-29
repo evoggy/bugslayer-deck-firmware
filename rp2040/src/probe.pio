@@ -71,14 +71,14 @@ public read_cmd:
 ; Implement probe_gpio_init() and probe_sm_init() methods here - set pins, offsets, sidesets etc
 % c-sdk {
 
-static inline void probe_gpio_init(PIO pio, int clkPin, int dioPin)
+static inline void probe_gpio_init(PIO pio, int clkPin, int dioPin, int rstPin)
 {
-#if defined(PROBE_PIN_RESET)
-    // Target reset pin: pull up, input to emulate open drain pin
-    gpio_pull_up(PROBE_PIN_RESET);
-    // gpio_init will leave the pin cleared and set as input
-    gpio_init(PROBE_PIN_RESET);
-#endif
+    if (rstPin != -1) {
+        // Target reset pin: pull up, input to emulate open drain pin
+        gpio_pull_up(rstPin);
+        // gpio_init will leave the pin cleared and set as input
+        gpio_init(rstPin);
+    }
     // Funcsel pins
     pio_gpio_init(pio, clkPin);
     pio_gpio_init(pio, dioPin);
@@ -88,8 +88,12 @@ static inline void probe_gpio_init(PIO pio, int clkPin, int dioPin)
 
 
 // DAP interface says all pins have to be High-Z when disabled
-static inline void probe_gpio_deinit(PIO pio, int clkPin, int dioPin)
+static inline void probe_gpio_deinit(PIO pio, int clkPin, int dioPin, int rstPin)
 {
+	if (rstPin != -1) {
+		gpio_deinit(rstPin);
+		gpio_disable_pulls(rstPin);
+	}
 	gpio_deinit(clkPin);
 	gpio_disable_pulls(clkPin);
 	gpio_deinit(dioPin);

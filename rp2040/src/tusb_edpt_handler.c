@@ -171,7 +171,7 @@ bool dap_edpt_xfer_cb(uint8_t __unused rhport, uint8_t ep_addr, xfer_result_t re
 			// so we account for this by only setting wasEmpty to true if the next callback will empty the buffer
 			if(!state->USBResponseBuffer.wasEmpty)
 			{
-				usbd_edpt_xfer(rhport, ep_addr, RD_SLOT_PTR(state->USBResponseBuffer), (uint16_t) state->_resp_len);
+				usbd_edpt_xfer(rhport, ep_addr, RD_SLOT_PTR(state->USBResponseBuffer), state->USBResponseBuffer.data_len[RD_IDX(state->USBResponseBuffer)]);
 				state->USBResponseBuffer.wasEmpty = (state->USBResponseBuffer.rptr + 1) == state->USBResponseBuffer.wptr;
 			}
 
@@ -262,12 +262,14 @@ void dap_thread(void *ptr)
 			if(buffer_empty(&state->USBResponseBuffer))
 			{
 				memcpy(WR_SLOT_PTR(state->USBResponseBuffer), state->DAPResponseBuffer, (uint16_t) state->_resp_len);
+				state->USBResponseBuffer.data_len[WR_IDX(state->USBResponseBuffer)] = (uint16_t) state->_resp_len;
 				state->USBResponseBuffer.wptr++;
 
-				usbd_edpt_xfer(state->_rhport, state->_in_ep_addr, RD_SLOT_PTR(state->USBResponseBuffer), (uint16_t) state->_resp_len);
+				usbd_edpt_xfer(state->_rhport, state->_in_ep_addr, RD_SLOT_PTR(state->USBResponseBuffer), state->USBResponseBuffer.data_len[RD_IDX(state->USBResponseBuffer)]);
 			} else {
 
 				memcpy(WR_SLOT_PTR(state->USBResponseBuffer), state->DAPResponseBuffer, (uint16_t) state->_resp_len);
+				state->USBResponseBuffer.data_len[WR_IDX(state->USBResponseBuffer)] = (uint16_t) state->_resp_len;
 				state->USBResponseBuffer.wptr++;
 
 				// The In callback needs to check this flag to know when to queue up the next buffer.

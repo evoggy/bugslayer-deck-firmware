@@ -23,9 +23,11 @@ Each stage has an explicit pass criterion. Do not move on without it.
 flash, USB routing through the CH334 and BOOTSEL recovery.
 → *Pass: a CDC port enumerates and prints; BOOTSEL re-flashes over USB.*
 
-**0b. RP2040 probe.** Out of scope here — testable with probe-rs / an existing CMSIS-DAP
-build. Only needs to prove the hub sees it.
-→ *Pass: probe-rs lists the probe.*
+**0b. RP2040 probe.** Flash `rp2040/` over the RP2040's BOOTSEL (SW2). It enumerates as
+`35F0:DB11` with four CMSIS-DAP interfaces, one per SWD port. See
+[../rp2040/README.md](../rp2040/README.md).
+→ *Pass: `probe-rs list` shows four probes, and `probe-rs info --probe 35f0:db11-3` sees the
+RP2350. From then on the RP2350 can be flashed over SWD4 instead of BOOTSEL.*
 
 **0c. FX2 with no firmware at all.** Leave `FX_RESET#` released and the RP2350 silent on I²C.
 The FX2's boot ROM finds no EEPROM at 0xA2 and enumerates as **`04B4:8613`**.
@@ -187,5 +189,4 @@ Crazyflie startup** — every deck, every bus, no time-boxing.
   proven first.
 - The USB/UART mux (`USB_UART_MUX_SEL/nEN`) and power switching, beyond `pwr`/`pull` commands.
 - Compression. v0 is raw samples; RLE comes after the pipe is proven.
-- The RP2040's three DAPs, past "probe-rs sees it". See [../rp2040/README.md](../rp2040/README.md)
-  for the open question there.
+- The RP2040's SWD1–3 against real targets, past "probe-rs sees it".

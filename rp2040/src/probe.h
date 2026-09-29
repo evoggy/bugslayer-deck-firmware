@@ -52,5 +52,6 @@ void probe_assert_reset(uint32_t probeId, bool state);
 int probe_reset_level(uint32_t probeId);
 void probe_led_init();
 void probe_led_update();
+void probe_running_led(uint32_t probeId, bool on);
 
 #endif

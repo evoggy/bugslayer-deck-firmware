@@ -62,8 +62,10 @@ struct _probe {
     int dioPin;
     PIO pio;
     int sm;        
+    int rstPin;
 
     int activityLedPin;
+    int runningLedPin;
 };
 
 
@@ -75,10 +77,13 @@ static struct _probe probes[MAX_DAP_PROBES] = {
 };
 
 
+// Pins stay Hi-Z with no pulls until a debugger connects (probe_init). RP2040 pads
+// come out of reset with a pull-down, which would load the target's pull-ups -
+// on SWD4 it drags the RP2350's RUN pin towards mid-rail.
 void DAP_SETUP (uint32_t probeId) 
 {
     assert(probeId < MAX_DAP_PROBES);    
-    probe_gpio_init(probes[probeId].pio, probes[probeId].clkPin, probes[probeId].dioPin);
+    probe_gpio_deinit(probes[probeId].pio, probes[probeId].clkPin, probes[probeId].dioPin, probes[probeId].rstPin);
 }
 
 
@@ -95,20 +100,31 @@ void probe_set_swclk_freq(uint32_t probeId, uint freq_khz) {
 void probe_assert_reset(uint32_t probeId, bool state)
 {
     assert(probeId < MAX_DAP_PROBES);
-#if defined(PROBE_PIN_RESET)
+    int pin = probes[probeId].rstPin;
+    if (pin == -1)
+        return;
+    if (!probes[probeId].initted) {
+        // Reset before DAP_Connect (connect-under-reset): drive it, but go back
+        // to parked Hi-Z on release so an idle port never loads the target
+        if (state == 0) {
+            gpio_init(pin);
+            gpio_set_dir(pin, GPIO_OUT);
+        } else {
+            gpio_deinit(pin);
+            gpio_disable_pulls(pin);
+        }
+        return;
+    }
     /* Change the direction to out to drive pin to 0 or to in to emulate open drain */
-    gpio_set_dir(PROBE_PIN_RESET, state == 0 ? GPIO_OUT : GPIO_IN);
-#endif
+    gpio_set_dir(pin, state == 0 ? GPIO_OUT : GPIO_IN);
 }
 
 int probe_reset_level(uint32_t probeId)
 {
     assert(probeId < MAX_DAP_PROBES);
-#if defined(PROBE_PIN_RESET)
-    return gpio_get(PROBE_PIN_RESET);
-#else
-    return 0;
-#endif
+    if (probes[probeId].rstPin == -1)
+        return 0;
+    return gpio_get(probes[probeId].rstPin);
 }
 
 typedef enum probe_pio_command {
@@ -183,6 +199,7 @@ void probe_init(uint32_t probeId) {
     assert(probeId < MAX_DAP_PROBES);
 
     if (!probes[probeId].initted) {
+        probe_gpio_init(probes[probeId].pio, probes[probeId].clkPin, probes[probeId].dioPin, probes[probeId].rstPin);
         uint offset = pio_add_program(probes[probeId].pio, &probe_program);
         probes[probeId].offset = offset;
 
@@ -209,6 +226,7 @@ void probe_deinit(uint32_t probeId)
     pio_remove_program(probes[probeId].pio, &probe_program, probes[probeId].offset);
 
     probe_assert_reset(probeId, 1);	// de-assert nRESET
+    probe_gpio_deinit(probes[probeId].pio, probes[probeId].clkPin, probes[probeId].dioPin, probes[probeId].rstPin);
 
     probes[probeId].initted = 0;  
   }
@@ -219,37 +237,32 @@ void probe_led_init()
     for(int i=0;i<MAX_DAP_PROBES;i++)
     {
         struct _probe* probe = &probes[i];
-        if(probe->activityLedPin != -1)
+        int pins[] = { probe->activityLedPin, probe->runningLedPin };
+        for(int j=0;j<2;j++)
         {
-            // Led off
-            gpio_init(probe->activityLedPin);
-            gpio_set_dir(probe->activityLedPin, GPIO_OUT);    
-            gpio_put(probe->activityLedPin, 0);    
+            if(pins[j] == -1)
+                continue;
+            gpio_init(pins[j]);
+            gpio_set_dir(pins[j], GPIO_OUT);
+            gpio_put(pins[j], 0);
         }
     }
 }
 
+// Connected LED: on while the port is in use by a debugger
 void probe_led_update()
 {
     for(int i=0;i<MAX_DAP_PROBES;i++)
     {
-        struct _probe* probe = &probes[i];
-        if(probe->activityLedPin != -1)
-        {
-            if(probes[i].initted)
-            {                
-                // Use pullup to dim led ( full bright activity not used as swd traffic is constant )
-                gpio_init(probe->activityLedPin);
-                gpio_set_dir(probe->activityLedPin, GPIO_IN);    
-                gpio_pull_up(probe->activityLedPin);    
-            }
-            else
-            {
-                // Led off
-                gpio_init(probe->activityLedPin);
-                gpio_set_dir(probe->activityLedPin, GPIO_OUT);    
-                gpio_put(probe->activityLedPin, 0);    
-            }
-        }
+        if(probes[i].activityLedPin != -1)
+            gpio_put(probes[i].activityLedPin, probes[i].initted);
     }
+}
+
+// Running LED: driven by the debugger through DAP_HostStatus
+void probe_running_led(uint32_t probeId, bool on)
+{
+    assert(probeId < MAX_DAP_PROBES);
+    if(probes[probeId].runningLedPin != -1)
+        gpio_put(probes[probeId].runningLedPin, on);
 }

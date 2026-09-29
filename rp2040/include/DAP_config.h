@@ -462,12 +462,8 @@ __STATIC_FORCEINLINE void     PIN_nTRST_OUT  (uint32_t bit) {
 /** nRESET I/O pin: Get Input.
 \return Current status of the nRESET DAP hardware I/O pin.
 */
-__STATIC_FORCEINLINE uint32_t PIN_nRESET_IN  (void) {
-#ifdef PROBE_PIN_RESET
-  return probe_reset_level();
-#else
-  return (0U);
-#endif
+__STATIC_FORCEINLINE uint32_t PIN_nRESET_IN  (uint32_t probeId) {
+  return probe_reset_level(probeId);
 }
 
 /** nRESET I/O pin: Set Output.
@@ -475,12 +471,8 @@ __STATIC_FORCEINLINE uint32_t PIN_nRESET_IN  (void) {
            - 0: issue a device hardware reset.
            - 1: release device hardware reset.
 */
-__STATIC_FORCEINLINE void     PIN_nRESET_OUT (uint32_t bit) {
-#ifdef PROBE_PIN_RESET
-  probe_assert_reset(!!bit);
-#else
-  (void) bit;
-#endif
+__STATIC_FORCEINLINE void     PIN_nRESET_OUT (uint32_t probeId, uint32_t bit) {
+  probe_assert_reset(probeId, !!bit);
 }
 
 ///@}
@@ -504,10 +496,10 @@ It is recommended to provide the following LEDs for status indication:
            - 1: Connect LED ON: debugger is connected to CMSIS-DAP Debug Unit.
            - 0: Connect LED OFF: debugger is not connected to CMSIS-DAP Debug Unit.
 */
-__STATIC_INLINE void LED_CONNECTED_OUT (uint32_t bit) {
-#ifdef PROBE_DAP_CONNECTED_LED
-  gpio_put(PROBE_DAP_CONNECTED_LED, bit);
-#endif
+__STATIC_INLINE void LED_CONNECTED_OUT (uint32_t probeId, uint32_t bit) {
+  // The connected LED follows the port's PIO state instead, see probe_led_update()
+  (void) probeId;
+  (void) bit;
 }
 
 /** Debug Unit: Set status Target Running LED.
@@ -515,10 +507,8 @@ __STATIC_INLINE void LED_CONNECTED_OUT (uint32_t bit) {
            - 1: Target Running LED ON: program execution in target started.
            - 0: Target Running LED OFF: program execution in target stopped.
 */
-__STATIC_INLINE void LED_RUNNING_OUT (uint32_t bit) {
-#ifdef PROBE_DAP_RUNNING_LED
-  gpio_put(PROBE_DAP_RUNNING_LED, bit);
-#endif
+__STATIC_INLINE void LED_RUNNING_OUT (uint32_t probeId, uint32_t bit) {
+  probe_running_led(probeId, bit);
 }
 
 ///@}

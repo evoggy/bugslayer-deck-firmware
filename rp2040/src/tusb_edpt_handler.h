@@ -17,6 +17,7 @@
 
 typedef struct {
 	uint8_t data[DAP_PACKET_COUNT][DAP_PACKET_SIZE];
+	uint16_t data_len[DAP_PACKET_COUNT];	// response length per slot (upstream debugprobe 93c95e4)
 	volatile uint32_t wptr;
 	volatile uint32_t rptr;
 	volatile bool wasEmpty;

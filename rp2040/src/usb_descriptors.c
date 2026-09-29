@@ -47,8 +47,8 @@ tusb_desc_device_t const desc_device =
     .bDeviceProtocol    = 0x00,
     .bMaxPacketSize0    = CFG_TUD_ENDPOINT0_SIZE,
 
-    .idVendor           = 0x2E8A, // Pi+1
-    .idProduct          = 0x000c, // CMSIS-DAP Debug Probe
+    .idVendor           = PROBE_USB_VID,
+    .idProduct          = PROBE_USB_PID,
     .bcdDevice          = 0x0222, // Version 02.22
     .iManufacturer      = 0x01,
     .iProduct           = 0x02,
@@ -103,10 +103,10 @@ uint8_t desc_configuration[] =
 {
   TUD_CONFIG_DESCRIPTOR(1, ITF_NUM_TOTAL, 0, CONFIG_TOTAL_LEN, 0, 100),
   // Bulk (named interface)
-  TUD_VENDOR_DESCRIPTOR(ITF_NUM_PROBE, 5, DAP_OUT_EP_NUM, DAP_IN_EP_NUM, 64),
-  TUD_VENDOR_DESCRIPTOR(ITF1_NUM_PROBE, 5, DAP1_OUT_EP_NUM, DAP1_IN_EP_NUM, 64),
-  TUD_VENDOR_DESCRIPTOR(ITF2_NUM_PROBE, 5, DAP2_OUT_EP_NUM, DAP2_IN_EP_NUM, 64),
-  TUD_VENDOR_DESCRIPTOR(ITF3_NUM_PROBE, 5, DAP3_OUT_EP_NUM, DAP3_IN_EP_NUM, 64),
+  TUD_VENDOR_DESCRIPTOR(ITF_NUM_PROBE, 8, DAP_OUT_EP_NUM, DAP_IN_EP_NUM, 64),
+  TUD_VENDOR_DESCRIPTOR(ITF1_NUM_PROBE, 9, DAP1_OUT_EP_NUM, DAP1_IN_EP_NUM, 64),
+  TUD_VENDOR_DESCRIPTOR(ITF2_NUM_PROBE, 10, DAP2_OUT_EP_NUM, DAP2_IN_EP_NUM, 64),
+  TUD_VENDOR_DESCRIPTOR(ITF3_NUM_PROBE, 11, DAP3_OUT_EP_NUM, DAP3_IN_EP_NUM, 64),
   // Interface 1 + 2
   TUD_CDC_DESCRIPTOR(ITF_NUM_CDC_COM, 6, CDC_NOTIFICATION_EP_NUM, 64, CDC_DATA_OUT_EP_NUM, CDC_DATA_IN_EP_NUM, 64),
   TUD_CDC_DESCRIPTOR(ITF_NUM_CDC1_COM, 7, CDC1_NOTIFICATION_EP_NUM, 64, CDC1_DATA_OUT_EP_NUM, CDC1_DATA_IN_EP_NUM, 64),       
@@ -131,13 +131,17 @@ uint8_t const * tud_descriptor_configuration_cb(uint8_t index)
 char const* string_desc_arr [] =
 {
   (const char[]) { 0x09, 0x04 }, // 0: is supported language is English (0x0409)
-  "Multiprobe", // 1: Manufacturer
+  PROBE_MANUFACTURER_STRING, // 1: Manufacturer
   PROBE_PRODUCT_STRING, // 2: Product
   usb_serial,     // 3: Serial, uses flash unique ID
   "CMSIS-DAP v1 Interface", // 4: Interface descriptor for HID transport
   "CMSIS-DAP v2 Interface", // 5: Interface descriptor for Bulk transport
-  "CDC-ACM UART Interface", // 6: Interface descriptor for CDC
-  "Custom CDC-ACM UART Interface", // 6: Interface descriptor for CDC
+  "SWO ACM0", // 6: Interface descriptor for CDC 0
+  "SWO ACM1", // 7: Interface descriptor for CDC 1
+  PROBE_ITF0_STRING, // 8: CMSIS-DAP v2, port 1
+  PROBE_ITF1_STRING, // 9: CMSIS-DAP v2, port 2
+  PROBE_ITF2_STRING, // 10: CMSIS-DAP v2, port 3
+  PROBE_ITF3_STRING, // 11: CMSIS-DAP v2, port 4
 };
 
 static uint16_t _desc_str[32];

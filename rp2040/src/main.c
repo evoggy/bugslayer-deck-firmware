@@ -138,6 +138,10 @@ void usb_thread(void *ptr)
 
 int main(void) 
 {
+    // First thing: park all SWD pins Hi-Z (RP2040 pads reset with pull-downs)
+    for(int i=0;i<MAX_DAP_PROBES;i++)
+      DAP_Setup(i);
+
     // startup flash
     gpio_init(PROBE_USB_CONNECTED_LED);
     gpio_set_dir(PROBE_USB_CONNECTED_LED, GPIO_OUT);    
@@ -146,7 +150,9 @@ int main(void)
     probe_led_init();
     cdc_led_init();
 
+#if PICO_RP2350
     set_sys_clock_khz(252000, true);
+#endif
     sleep_ms(100);
 
     globalMutex = xSemaphoreCreateMutex();
@@ -154,7 +160,8 @@ int main(void)
     memset(uartDevices, 0, sizeof(uartDevices));
 
     cdc_itf_configure(&uartDevices[0], "ITF0", 0, EUartType_Hardware, 0);
-    cdc_itf_configure(&uartDevices[1], "ITF1", 1, EUartType_Hardware, 1);
+    // SWO1 and SWO2 share UART1, so ACM1 starts unbound (select with DAP vendor cmd 0x92)
+    cdc_itf_configure(&uartDevices[1], "ITF1", 1, EUartType_Hardware, 2);
     
     // Declare pins in binary information
     bi_decl_config();
@@ -164,9 +171,6 @@ int main(void)
 
     tusb_init();
     
-    for(int i=0;i<MAX_DAP_PROBES;i++)
-      DAP_Setup(i);
-
     probe_info("Welcome to debugprobe!\n");
 
     if (THREADED) {

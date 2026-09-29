@@ -24,16 +24,19 @@ Design notes: Obsidian `Projects/Bugslayer/Deck/`.
   │                 │                     │
 ┌─┴────────┐   ┌────┴─────┐        ┌──────┴──────┐
 │ RP2040   │   │ RP2350B  │◄──────►│  CBM9002A   │
-│ 3× DAP   │   │ sniff +  │ 12-pin │  (FX2LP)    │
+│ 4× DAP   │   │ sniff +  │ 12-pin │  (FX2LP)    │
 │ CMSIS-DAP│   │ control  │ slave  │  bulk IN    │
-└─┬─┬─┬────┘   └────┬─────┘  FIFO  └─────────────┘
-  │ │ │             │
- 3× SWD          CF expansion port (16 signals)
- (JST-SH 6p)
+└─┬─┬─┬─┬──┘   └────┬─────┘  FIFO  └─────────────┘
+  │ │ │ │             │
+ SWD1..4          CF expansion port (16 signals)
 ```
 
-- **RP2040** — three independent SWD debug ports on 6-pin JST-SH connectors, each with
-  its own CONNECTED/RUNNING LED. Enumerates on the hub as a CMSIS-DAP probe.
+SWD1/SWD2 go to 6-pin JST-SH connectors, SWD3 to the CF deck port (IO_1/IO_2/IO_4), and
+SWD4 to the RP2350.
+
+- **RP2040** — four independent SWD ports, each with its own CONNECTED/RUNNING LED: two
+  6-pin JST-SH connectors, the Crazyflie deck port (IO_1/IO_2/IO_4) and the on-board RP2350.
+  One USB device with four CMSIS-DAP v2 interfaces, based on picolemon/multiprobe.
 - **RP2350B** — the actual instrument. PIO sniffs the 16 expansion-port signals, and the
   same pins can drive them actively when the deck is used standalone. Owns the **control
   plane** on its own Full-Speed USB, and boots the FX2 over an emulated I²C EEPROM.
@@ -53,7 +56,7 @@ the host pairs the two channels. Full table and the bring-up identities in
 | Directory | What | Toolchain |
 |---|---|---|
 | `rp2350/` | Sniffing, control plane, FX2 boot + clocking | Pico SDK / CMake / arm-none-eabi |
-| `rp2040/` | 3-port CMSIS-DAP probe | Pico SDK / CMake / arm-none-eabi |
+| `rp2040/` | 4-port CMSIS-DAP probe | Pico SDK / CMake / arm-none-eabi, FreeRTOS (submodule) |
 | `fx2/` | 8051 slave-FIFO firmware for the CBM9002A | SDCC + libfx2 |
 | `host/` | Minimal bring-up + verification tools | Python / libusb |
 | `docs/` | Protocol, pin map, bring-up plan | — |
@@ -96,6 +99,6 @@ compiles and is ready for stage 0/1 of the bring-up plan.
 | Firmware | Status |
 |---|---|
 | `rp2350/` | stage 0 + 1 — CDC command loop, FX2 link, PIO write engine, counter DMA. **Builds clean** |
-| `rp2040/` | not started; USB topology question open |
+| `rp2040/` | 4-port CMSIS-DAP (MultiProbe port). **Builds clean**, ready for stage 0b |
 | `fx2/` | stage 1 — slave FIFO + WinUSB descriptors. **Not compiled** (no SDCC installed here) |
 | `host/` | `fx2_counter_test.py` done; needs `pip install libusb1` |
