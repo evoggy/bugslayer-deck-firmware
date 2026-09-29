@@ -1,9 +1,11 @@
+#include <stdio.h>
 #include <string.h>
 
 #include "hardware/clocks.h"
 #include "hardware/dma.h"
 #include "hardware/gpio.h"
 #include "hardware/pio.h"
+#include "hardware/structs/pads_bank0.h"
 #include "pico/stdlib.h"
 
 #include "board.h"
@@ -27,6 +29,7 @@ static int      s_dma[2];
 static bool     s_running;
 static uint32_t s_next_word;
 static uint64_t s_words_total;
+static bool     s_flushed = true;
 
 static void fill(uint which) {
     uint32_t v = s_next_word;
@@ -123,8 +126,18 @@ void fx2_counter_start(void) {
         dma_channel_set_irq0_enabled(s_dma[i], true);
     }
 
-    s_running = true;
+    // Start from an empty TX FIFO and OSR. Anything left over from a previous
+    // run would go out first, and a partial word shifts every word after it.
+    // Stopping the SM pauses IFCLK for a few cycles, which is harmless once
+    // the FX2 has configured itself.
+    pio_sm_set_enabled(s_pio, s_sm, false);
+    pio_sm_clear_fifos(s_pio, s_sm);
+    pio_sm_restart(s_pio, s_sm);
     jump_to(fx2_write_offset_stall);   // always re-enter with SLWR# deasserted
+    pio_sm_exec(s_pio, s_sm, pio_encode_set(pio_pins, 0b11));
+    pio_sm_set_enabled(s_pio, s_sm, true);
+
+    s_running = true;
     dma_channel_start(s_dma[0]);
 }
 
@@ -136,8 +149,16 @@ void fx2_counter_stop(void) {
         dma_channel_abort(s_dma[i]);
         dma_channel_acknowledge_irq0(s_dma[i]);
     }
-    // Let the TX FIFO drain, then park the SM back on the clock-only loop.
-    sleep_us(200);
+    // Let the SM finish every word already queued, so the FX2 only ever holds
+    // whole words: TXSTALL means the FIFO and the OSR are both empty. If EP6 is
+    // full and nobody is reading, that never happens; give up after 100 ms and
+    // let the next arm discard the rest.
+    s_pio->fdebug = 1u << (PIO_FDEBUG_TXSTALL_LSB + s_sm);
+    absolute_time_t deadline = make_timeout_time_ms(100);
+    while (!(s_pio->fdebug & (1u << (PIO_FDEBUG_TXSTALL_LSB + s_sm))) &&
+           !time_reached(deadline))
+        tight_loop_contents();
+    s_flushed = (s_pio->fdebug & (1u << (PIO_FDEBUG_TXSTALL_LSB + s_sm))) != 0;
     jump_to(fx2_write_offset_clk_only);
     // TODO(stage 5): pulse PKTEND# here so a partial packet is committed
     // instead of being stranded in EP6. Not needed while the counter runs
@@ -146,4 +167,19 @@ void fx2_counter_stop(void) {
 
 bool fx2_counter_running(void) { return s_running; }
 
+bool fx2_counter_flushed(void) { return s_flushed; }
+
 uint64_t fx2_counter_words(void) { return s_words_total; }
+
+void fx2_link_debug(void) {
+    uint pc = pio_sm_get_pc(s_pio, s_sm) - s_offset;
+    printf("dbg flagb=%d iso=%d pc=%u (clk_only=%u stall=%u) txlevel=%u "
+           "dma0=%lu dma1=%lu busy=%d/%d\n",
+           gpio_get(PIN_FX_FLAGB),
+           (int)!!(pads_bank0_hw->io[PIN_FX_FLAGB] & PADS_BANK0_GPIO0_ISO_BITS),
+           pc, fx2_write_offset_clk_only, fx2_write_offset_stall,
+           pio_sm_get_tx_fifo_level(s_pio, s_sm),
+           (unsigned long)dma_channel_hw_addr(s_dma[0])->transfer_count,
+           (unsigned long)dma_channel_hw_addr(s_dma[1])->transfer_count,
+           dma_channel_is_busy(s_dma[0]), dma_channel_is_busy(s_dma[1]));
+}

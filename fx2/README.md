@@ -32,7 +32,8 @@ during development, because Windows caches the MS-OS-descriptor answer per VID/P
 
 ## Build
 
-libfx2 is a submodule (`git submodule update --init`). Needs `sdcc`:
+libfx2 is a submodule (`git submodule update --init`). Needs `sdcc` (`apt install sdcc`,
+4.2.0 tested); libfx2's own library builds on first `make`:
 
 ```
 make            # -> bugslayer-fx2.ihex
@@ -46,7 +47,7 @@ image for development (our VID/PID, host RAM-loads the firmware).
 
 ## Boot
 
-The RP2350 emulates the EEPROM at 0xA2 on GP6/GP7. Byte 0 of the image selects the mode:
+The RP2350 emulates the EEPROM at 0xA2 on GP4/GP5 (i2c0). Byte 0 of the image selects the mode:
 
 | Byte 0 | Behaviour |
 |---|---|
@@ -65,8 +66,10 @@ tools/    C2 image → C array for the RP2350 build
 
 ## Status
 
-Written, **not compiled** — there is no SDCC on the machine this was authored on, so expect to
-fix a syntax slip or two on first build. Nothing has run on hardware.
+**Works on the rev-A prototype (2026-09-29).** It builds warning-free with SDCC 4.2.0,
+RAM-loads with `fx2tool`, re-enumerates as `35F0:DB13` at High Speed, and carried 1.1 GB of
+the RP2350's counter at 18.75 MB/s with zero gaps. The CBM9002A clone behaves like the Cypress
+part on the sync external-IFCLK path.
 
 Implemented: sync slave FIFO init, EP6 bulk IN 512 quad-buffered, AUTOIN, vendor-class
 descriptors, MS OS 1.0 `WINUSB`, and `tools/mkc2.py` (tested against libfx2's own

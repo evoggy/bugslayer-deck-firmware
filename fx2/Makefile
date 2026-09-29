@@ -17,3 +17,7 @@ c2: $(TARGET).ihex
 		--header build/fx2_image.h $(TARGET).ihex build/$(TARGET).c2
 
 .PHONY: c2
+
+# fx2rules.mk lists the libraries as prerequisites but only knows how to build
+# them via .stamp, so a fresh checkout fails with "No rule to make target".
+$(LIBFX2)/lib/$(MODEL)/%.lib: $(LIBFX2)/.stamp ;

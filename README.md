@@ -93,12 +93,12 @@ captures on its own.
 
 ## Status
 
-The board has not been fabricated, so **none of this has run on hardware**. Everything below
-compiles and is ready for stage 0/1 of the bring-up plan.
+Rev-A prototypes are in bring-up. **Stages 0 and 1 pass** (2026-09-29): all three chips
+enumerate behind the hub, and the RP2350 → FX2 → PC pipe carries 18.75 MB/s with zero loss.
 
 | Firmware | Status |
 |---|---|
-| `rp2350/` | stage 0 + 1 — CDC command loop, FX2 link, PIO write engine, counter DMA. **Builds clean** |
-| `rp2040/` | 4-port CMSIS-DAP (MultiProbe port). **Builds clean**, ready for stage 0b |
-| `fx2/` | stage 1 — slave FIFO + WinUSB descriptors. **Not compiled** (no SDCC installed here) |
-| `host/` | `fx2_counter_test.py` done; needs `pip install libusb1` |
+| `rp2350/` | stage 0 + 1 — CDC command loop, FX2 link, PIO write engine, counter DMA. **Passes stage 1 on hardware** |
+| `rp2040/` | 4-port CMSIS-DAP (MultiProbe port). **Runs**: four probes listed, SWD4 flashes the RP2350 |
+| `fx2/` | stage 1 — slave FIFO + WinUSB descriptors. **Passes stage 1 on hardware** (RAM-loaded) |
+| `host/` | `bslyctl.py`, `fx2_counter_test.py`, `stage1.sh`; see [host/README.md](host/README.md) |

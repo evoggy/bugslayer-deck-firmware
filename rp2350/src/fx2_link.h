@@ -26,5 +26,12 @@ void fx2_counter_start(void);
 void fx2_counter_stop(void);
 bool fx2_counter_running(void);
 
+// False if the last stop timed out with words still queued (EP6 full and the
+// host not reading). The next start discards them.
+bool fx2_counter_flushed(void);
+
 // Words handed to the DMA since the last start.
 uint64_t fx2_counter_words(void);
+
+// One line of link internals for bring-up: FLAGB, PIO PC, FIFO level, DMA.
+void fx2_link_debug(void);

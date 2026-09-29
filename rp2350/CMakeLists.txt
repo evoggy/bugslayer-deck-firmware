@@ -37,7 +37,7 @@ target_compile_definitions(bugslayer_deck PRIVATE
     USBD_VID=0x35F0
     USBD_PID=0xDB12
     USBD_MANUFACTURER="Bitcraze AB"
-    USBD_PRODUCT="Bugslayer deck control"
+    USBD_PRODUCT="Bugslayer deck ctrl"  # the SDK caps strings at 19 chars
 )
 
 pico_add_extra_outputs(bugslayer_deck)

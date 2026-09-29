@@ -5,12 +5,20 @@ repository. Nothing here should grow a UI.
 
 | Tool | Stage | Purpose |
 |---|---|---|
-| `fx2_counter_test.py` | 1 | Read the FX2 bulk IN endpoint, verify the 32-bit counter is gap-free, print MB/s |
+| `bslyctl.py` | 0+ | Send control-plane commands to the RP2350 (`35F0:DB12`) and print the replies |
+| `fx2_counter_test.py` | 1 | Read the FX2 bulk IN endpoint, verify the 32-bit counter is gap-free, print MB/s. `--stall N` is the backpressure test |
+| `stage1.sh` | 1 | The whole stage 1 run: reset + RAM-load the FX2, arm, 60 s stream, stall test |
+| `99-bugslayer-deck.rules` | — | udev access to `35F0:DB11/12/13` and the FX2 boot ROM `04B4:8613` |
 | `bsly.py` | 2+ | `arm` / `disarm` / `capture` over the RP2350 CDC; parse 512-byte blocks; check `seq`; write a capture file |
 | `decode_ow.py` | 3 | Decode 1-Wire from a capture and print the 64-bit deck ROM ID |
 | `decode_spi.py` | 4 | Decode SPI, auto-detecting which of IO_1–4 is CS |
 
-Python + `pyusb`/`pyserial`. Keep them single-file and dependency-light.
+Python + `libusb1`/`pyserial`, plus `fx2` for `fx2tool`. Keep them single-file and
+dependency-light:
+
+```
+python3 -m venv host/.venv && host/.venv/bin/pip install libusb1 pyserial fx2
+```
 
 ## Pairing two devices
 
@@ -21,7 +29,9 @@ does not exist until RP2350 firmware releases `FX_RESET#`. Wait and retry.
 
 ## Status
 
-`fx2_counter_test.py` is written and its stream checker is unit-tested (clean stream, injected
-gap, and the 2³² wrap). It has never talked to hardware. `pip install libusb1`.
+`bslyctl.py`, `fx2_counter_test.py` and `stage1.sh` run against the rev-A prototype
+(2026-09-29). The counter checker tells a real gap (a clean jump in the counter: words lost,
+counted exactly) from a resync (the byte alignment moved: a partial word, from a disarm/arm
+seam or a byte dropped at the FIFO-full edge), and a counter restart at a seam from both.
 
 The rest are not started.

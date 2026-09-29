@@ -4,6 +4,7 @@ build/
 *.bin
 *.hex
 *.ihx
+*.ihex
 *.rel
 *.lst
 *.rst

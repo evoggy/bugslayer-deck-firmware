@@ -15,7 +15,8 @@
 ;   FD driven      4 cyc = 26.7 ns before   (tSFD  >= 3.2 ns)   OK
 ;   SLWR# asserted 3 cyc = 20.0 ns before   (tSWR  >= 12.1 ns)  OK
 ;   FD/SLWR# held  4 cyc = 26.7 ns after    (tFDH  >= 4.5 ns)   OK
-;   FLAGB sampled  3 cyc = 20.0 ns after    (tXFLG <= 13.5 ns)  OK
+;   FLAGB sampled  3 cyc = 20.0 ns after    (tXFLG <= 13.5 ns)  OK, but only with
+;                  the input synchronizer bypassed (2 more cycles otherwise)
 ;
 ; A stalled OUT (empty TX FIFO) freezes the SM with IFCLK low and SLWR# still
 ; asserted from the previous word. That is safe: with no rising edge the FX2
@@ -62,7 +63,17 @@ static inline void fx2_write_program_init(PIO pio, uint sm, uint offset,
     pio_gpio_init(pio, pin_ifclk);
     pio_gpio_init(pio, pin_slwr);
     pio_gpio_init(pio, pin_slwr + 1);
-    gpio_set_input_enabled(pin_flagb, true);
+    // FLAGB is input-only, but it still needs a function select: on RP2350 the
+    // pads power up isolated and only gpio_set_function() clears ISO. Without
+    // it the PIO reads a latched 0 ("EP6 full") and never leaves `stall`.
+    pio_gpio_init(pio, pin_flagb);
+
+    // Bypass the 2-cycle input synchronizer on FLAGB. With it, `jmp pin` sees the
+    // pin as it was ~1 cycle after the rising edge, before tXFLG (13.5 ns) has
+    // elapsed: the engine writes one byte into a full EP6, and the FX2 silently
+    // drops it. FLAGB is synchronous to the IFCLK we generate, so bypassing is
+    // safe. The register is indexed from the PIO's GPIO base.
+    hw_set_bits(&pio->input_sync_bypass, 1u << (pin_flagb - pio_get_gpio_base(pio)));
 
     pio_sm_set_consecutive_pindirs(pio, sm, pin_fd0, 8, true);
     pio_sm_set_consecutive_pindirs(pio, sm, pin_ifclk, 3, true);   // IFCLK, SLWR#, PKTEND#

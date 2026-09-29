@@ -17,6 +17,23 @@ Each stage has an explicit pass criterion. Do not move on without it.
 
 ---
 
+## Results — rev-A prototype
+
+| Stage | Date | Result |
+|---|---|---|
+| 0b RP2040 probe | 2026-09-29 | ✅ `35F0:DB11`, four CMSIS-DAP interfaces. SWD4 sees the RP2350's two M33s and flashes it |
+| 0a RP2350 | 2026-09-29 | ✅ Flashed over SWD4, `35F0:DB12` CDC answers `ping`/`ver`/`id`/`stat`. Blank flash booted to `2e8a:000f` first, as expected |
+| 0c FX2, no firmware | 2026-09-29 | ✅ `fx2 up` → `04B4:8613` at **480 Mbit/s** on CH334 port 2 |
+| 1.1 6 MHz | 2026-09-29 | ✅ 6.00 MB/s, 61 MB, zero gaps. **The clone's sync external-IFCLK path works** |
+| 1.2 18.75 MHz | 2026-09-29 | ✅ **60 s, 1.13 GB, 18.76 MB/s, zero gaps**. Stall test (10 fill/stall rounds) clean |
+| 1.3 → 25 MB/s | — | not started |
+
+Two RP2350 bugs found and fixed on the way to 1.2, both now in `rp2350/README.md`:
+FLAGB's pad was still isolated (ISO) so the engine never left `stall`, and the PIO input
+synchronizer made FLAGB late enough to drop one byte per EP6-full event at clkdiv 1. The second
+is invisible in a plain streaming run where the host keeps up. `fx2_counter_test.py --stall`
+catches it.
+
 ## Stage 0 — signs of life, no firmware to speak of
 
 **0a. RP2350 blink + CDC.** Stock Pico SDK hello-world. Proves the +3V3 rail, XOSC, QSPI
