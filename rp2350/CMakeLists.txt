@@ -14,6 +14,7 @@ pico_sdk_init()
 add_executable(bugslayer_deck
     src/main.c
     src/fx2_link.c
+    src/fx2_boot.c
 )
 
 pico_generate_pio_header(bugslayer_deck ${CMAKE_CURRENT_LIST_DIR}/pio/fx2_write.pio)
@@ -25,6 +26,8 @@ target_link_libraries(bugslayer_deck
     pico_unique_id
     hardware_pio
     hardware_dma
+    hardware_i2c
+    pico_i2c_slave
 )
 
 # Control plane on the RP2350's own USB; nothing goes to a UART.

@@ -85,9 +85,13 @@ backpressure test is clean. The engine never waits on USB: the RP2350's clock is
 Control plane: `35F0:DB12` CDC, send `help`, or use `host/bslyctl.py`. LEDs: green heartbeat,
 yellow = FX2 up, blue = streaming. The whole stage 1 run is `host/stage1.sh`; by hand it is:
 
+At power-on the RP2350 serves the FX2's boot image (`src/fx2_boot.c`, emulated EEPROM at 0xA2)
+and brings it up, so `35F0:DB13` appears by itself with the RP2350's serial.
+
 ```
-fx2 up            # IFCLK starts, then FX_RESET# releases -> 04b4:8613
-                  # (host: fx2tool -d 04b4:8613 load fx2/bugslayer-fx2.ihex -> 35f0:db13)
+fx2 boot c2       # what the emulated EEPROM serves at the next up: c2 (default) / c0 / rom
+fx2 reboot        # FX_RESET# low, then IFCLK running and reset released
+stat              # boot=c2 eeprom_read=3389 when the FX2 read the whole image
 clk 37500000      # 5..37.5 MHz; 37.5 MHz is clkdiv 1 at 150 MHz (4 cycles/byte)
 arm
                   # (host: host/fx2_counter_test.py --ours --duration 60)
@@ -96,5 +100,4 @@ dbg               # EP6 room (FLAGB), pad ISO, PIO PC, TX FIFO level, DMA counts
 prof              # while streaming: % writing / flow-controlled by FLAGB / starved
 ```
 
-Not yet: capture, the block framing from ../docs/protocol.md, EEPROM emulation, PKTEND on
-disarm. See [../docs/bringup-plan.md](../docs/bringup-plan.md) stages 2–5.
+Not yet: capture, the block framing from ../docs/protocol.md, PKTEND on disarm. See [../docs/bringup-plan.md](../docs/bringup-plan.md) stages 2–5.

@@ -130,9 +130,9 @@ reject stale blocks unambiguously even though the two channels are unordered.
 
 ## Open questions
 
-- **Serial number into FX2 descriptors.** The FX2 image is a C2 blob served from the RP2350;
-  patching a string descriptor in it at boot is easy in principle. Needs a fixed offset or a
-  small patch table generated at build time. Decide before descriptors are written.
+- ~~**Serial number into FX2 descriptors.**~~ Resolved: `mkc2.py` records the offset of the
+  `BSLYSERIAL000000` placeholder in the generated header, and `fx2_boot.c` patches the RP2350's
+  16-character unique ID over it before serving the image. Verified on hardware.
 - **CDC vs vendor on the RP2350.** CDC is easier to debug; a vendor interface with MS OS
   descriptors gives one WinUSB backend for both devices. Possibly both, as a composite.
 - **Compression.** 8 bits/sample at 24 Msps is 24 MB/s of mostly idle. RLE or edge-plus-delta

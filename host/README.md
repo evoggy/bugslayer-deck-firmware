@@ -7,7 +7,7 @@ repository. Nothing here should grow a UI.
 |---|---|---|
 | `bslyctl.py` | 0+ | Send control-plane commands to the RP2350 (`35F0:DB12`) and print the replies |
 | `fx2_counter_test.py` | 1 | Read the FX2 bulk IN endpoint, verify the 32-bit counter is gap-free, print MB/s. `--stall N` is the backpressure test, `--no-check` counts bytes only |
-| `stage1.sh` | 1 | The whole stage 1 run: reset + RAM-load the FX2, arm, 60 s stream, stall test |
+| `stage1.sh` | 1 | The whole stage 1 run: reboot the FX2 (self-boot; `BOOT=ram` for fx2tool), arm, 60 s stream, stall test |
 | `99-bugslayer-deck.rules` | — | udev access to `35F0:DB11/12/13` and the FX2 boot ROM `04B4:8613` |
 | `bsly.py` | 2+ | `arm` / `disarm` / `capture` over the RP2350 CDC; parse 512-byte blocks; check `seq`; write a capture file |
 | `decode_ow.py` | 3 | Decode 1-Wire from a capture and print the 64-bit deck ROM ID |

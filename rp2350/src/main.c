@@ -15,6 +15,7 @@
 #include "pico/unique_id.h"
 
 #include "board.h"
+#include "fx2_boot.h"
 #include "fx2_link.h"
 
 #define FW_VERSION "0.1.0"
@@ -50,8 +51,8 @@ static void board_init(void) {
     gpio_set_dir(PIN_EXT_VCC_SENSE, GPIO_IN);
     gpio_pull_down(PIN_EXT_VCC_SENSE);
 
-    // FX_SDA/FX_SCL (GP4/5) stay untouched: with the RP2350 silent on I2C the
-    // FX2 boot ROM finds no EEPROM and enumerates as 04B4:8613.
+    // FX_SDA/FX_SCL (GP4/5) belong to fx2_boot.c, which emulates the FX2's
+    // boot EEPROM there.
 
     pico_get_unique_board_id_string(s_serial, sizeof(s_serial));
 }
@@ -69,6 +70,10 @@ static void cmd_help(void) {
     puts("  stat                  link and counter state");
     puts("  clk <hz>              set IFCLK (5000000..37500000 = clkdiv 1)");
     puts("  fx2 up|down           release/assert FX_RESET# with IFCLK running");
+    puts("  fx2 reboot            down, then up: the FX2 boots again");
+    puts("  fx2 boot [rom|c0|c2]  what the emulated EEPROM serves at the next up:");
+    puts("                        c2 = our firmware (default), c0 = our VID/PID for");
+    puts("                        fx2tool RAM loads, rom = silent, 04b4:8613");
     puts("  arm                   start the stage 1 counter stream");
     puts("  disarm                stop it");
     puts("  pwr vcc|vcom on|off   high-side switches");
@@ -78,12 +83,20 @@ static void cmd_help(void) {
 }
 
 static void cmd_stat(void) {
-    printf("stat fx2=%s ifclk=%lu counter=%s words=%llu cf_vcc=%d\n",
+    printf("stat fx2=%s boot=%s eeprom_read=%lu ifclk=%lu counter=%s words=%llu cf_vcc=%d\n",
            fx2_link_is_up() ? "up" : "down",
+           fx2_boot_mode_name(fx2_boot_get_mode()),
+           (unsigned long)fx2_boot_bytes_served(),
            (unsigned long)fx2_link_get_ifclk(),
            fx2_counter_running() ? "running" : "stopped",
            (unsigned long long)fx2_counter_words(),
            gpio_get(PIN_EXT_VCC_SENSE));
+}
+
+// Serve the boot image from a fresh count, then start IFCLK and release reset.
+static void fx2_up(void) {
+    fx2_boot_reset_stats();
+    fx2_link_up();
 }
 
 static void handle(char *line) {
@@ -95,7 +108,8 @@ static void handle(char *line) {
     if (!strcmp(cmd, "ping")) {
         puts("pong");
     } else if (!strcmp(cmd, "ver")) {
-        printf("ver rp2350=%s fx2=none hw=v1\n", FW_VERSION);
+        printf("ver rp2350=%s fx2_image=%lu hw=v1\n", FW_VERSION,
+               (unsigned long)fx2_boot_image_len());
     } else if (!strcmp(cmd, "id")) {
         printf("id serial=%s\n", s_serial);
     } else if (!strcmp(cmd, "stat")) {
@@ -110,13 +124,32 @@ static void handle(char *line) {
         printf("clk ok ifclk=%lu\n", (unsigned long)fx2_link_set_ifclk((uint32_t)atoi(a1)));
     } else if (!strcmp(cmd, "fx2") && a1) {
         if (!strcmp(a1, "up")) {
-            fx2_link_up();
-            printf("fx2 ok up ifclk=%lu\n", (unsigned long)fx2_link_get_ifclk());
+            fx2_up();
+            printf("fx2 ok up boot=%s ifclk=%lu\n", fx2_boot_mode_name(fx2_boot_get_mode()),
+                   (unsigned long)fx2_link_get_ifclk());
         } else if (!strcmp(a1, "down")) {
             fx2_link_down();
             puts("fx2 ok down");
+        } else if (!strcmp(a1, "reboot")) {
+            fx2_link_down();
+            sleep_ms(10);
+            fx2_up();
+            printf("fx2 ok reboot boot=%s\n", fx2_boot_mode_name(fx2_boot_get_mode()));
+        } else if (!strcmp(a1, "boot")) {
+            if (a2) {
+                fx2_boot_mode_t m = !strcmp(a2, "rom") ? FX2_BOOT_ROM
+                                  : !strcmp(a2, "c0")  ? FX2_BOOT_C0
+                                  : !strcmp(a2, "c2")  ? FX2_BOOT_C2 : (fx2_boot_mode_t)-1;
+                if ((int)m < 0) {
+                    puts("err usage: fx2 boot rom|c0|c2");
+                    return;
+                }
+                fx2_boot_set_mode(m);
+            }
+            printf("fx2 ok boot=%s (applies at the next fx2 up/reboot)\n",
+                   fx2_boot_mode_name(fx2_boot_get_mode()));
         } else {
-            puts("err usage: fx2 up|down");
+            puts("err usage: fx2 up|down|reboot|boot");
         }
     } else if (!strcmp(cmd, "arm")) {
         if (!fx2_link_is_up()) {
@@ -149,7 +182,11 @@ static void handle(char *line) {
 int main(void) {
     stdio_init_all();
     board_init();
+    fx2_boot_init(s_serial);
     fx2_link_init();
+
+    // The deck is one device to the user: the FX2 boots with the RP2350.
+    fx2_up();
 
     char line[64];
     uint len = 0;

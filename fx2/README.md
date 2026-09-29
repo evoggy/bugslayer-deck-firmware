@@ -39,8 +39,16 @@ libfx2 is a submodule (`git submodule update --init`). Needs `sdcc` (`apt instal
 
 ```
 make            # -> bugslayer-fx2.ihex
-make load       # RAM-load over USB with fx2tool (device is still 04B4:8613)
-make c2         # -> build/bugslayer-fx2.c2 and build/fx2_image.h
+make c2         # -> build/bugslayer-fx2.c2 and ../rp2350/src/fx2_image.h
+```
+
+**After changing the FX2 firmware, run `make c2` and commit `rp2350/src/fx2_image.h`.** That
+header is what the RP2350 serves at boot, and it's committed so the RP2350 build never needs
+SDCC. To iterate without reflashing the RP2350, boot the FX2 in C0 mode and RAM-load:
+
+```
+host/bslyctl.py "fx2 boot c0" "fx2 reboot"
+fx2tool -d 35f0:db13 load fx2/bugslayer-fx2.ihex
 ```
 
 `tools/mkc2.py` is standalone — it parses the Intel HEX and emits the C2 image itself, so the
@@ -49,15 +57,21 @@ image for development (our VID/PID, host RAM-loads the firmware).
 
 ## Boot
 
-The RP2350 emulates the EEPROM at 0xA2 on GP4/GP5 (i2c0). Byte 0 of the image selects the mode:
+The RP2350 emulates a 16-bit-addressed EEPROM at 0xA2 (7-bit 0x51) on GP4/GP5 (i2c0,
+400 kHz) and serves the C2 image (`rp2350/src/fx2_boot.c`). It patches its own serial into the
+`BSLYSERIAL000000` placeholder first, so both devices report the same `iSerialNumber`. At
+power-on the RP2350 starts IFCLK and releases `FX_RESET#`, and the FX2 enumerates about 0.2 s
+later. `fx2 boot` on the control plane picks what it serves at the next `fx2 up`/`fx2 reboot`:
 
-| Byte 0 | Behaviour |
-|---|---|
-| (silent I²C) | `04B4:8613`, ROM descriptors, host RAM-load — **bring-up mode** |
-| `0xC0` | our VID/PID, still host RAM-loads — **development mode** |
-| `0xC2` | full self-boot — **production** |
+| `fx2 boot` | EEPROM serves | FX2 enumerates as |
+|---|---|---|
+| `c2` (default) | the full image | `35F0:DB13` running our firmware — **normal** |
+| `c0` | byte 0 = `0xC0`, DISCON cleared | `35F0:DB13` boot ROM, waiting for `fx2tool` — **FX2 development** |
+| `rom` | nothing (I²C silent) | `04B4:8613` — **bring-up fallback** |
 
-One image, one byte. No reprogramming to switch.
+C0 has to clear DISCON (config byte bit 6). The image sets it for C2 because our firmware
+reconnects in `usb_init()`, but in C0 there is no firmware to reconnect and the FX2 never
+appears on the bus. Found on hardware.
 
 ## Layout
 
@@ -79,7 +93,8 @@ descriptors, MS OS 1.0 `WINUSB`, and `tools/mkc2.py` (tested against libfx2's ow
 
 USB identity is **`35F0:DB13`**.
 
-Not yet: the serial-string patching the RP2350 will do — the placeholder `BSLYSERIAL000000`
-and its offset in the generated header are in place, but nothing writes to it.
+**Self-boot works (2026-09-29):** 20/20 reboots enumerated with the RP2350's serial, and the
+self-booted FX2 streams 37.5 MB/s with zero gaps. A RAM-loaded `.ihex` (C0/rom modes) keeps the
+unpatched `BSLYSERIAL000000`, because only the image the RP2350 serves is patched.
 
 See [../docs/bringup-plan.md](../docs/bringup-plan.md) stage 1.
