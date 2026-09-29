@@ -1,4 +1,4 @@
-# Protocol (v0 draft)
+# Protocol (v0)
 
 Two channels, one stream format.
 
@@ -51,8 +51,8 @@ the CH334 hub:
 
 | Device | VID:PID | Interface | Serial |
 |---|---|---|---|
-| RP2040 — 3× CMSIS-DAP probe | `35F0:DB11` | CMSIS-DAP v2 (+ CDC) | own flash unique ID |
-| RP2350 — control plane | `35F0:DB12` | CDC (v0); vendor later | flash unique ID |
+| RP2040 — 4× CMSIS-DAP probe | `35F0:DB11` | 4× CMSIS-DAP v2 (+ 2 CDC for SWO) | own flash unique ID |
+| RP2350 — control plane | `35F0:DB12` | CDC (control) + vendor bulk IN (stream) | flash unique ID |
 | CBM9002A — capture stream | `35F0:DB13` | vendor, bulk IN EP6 | **RP2350's** flash unique ID |
 
 The FX2 deliberately reports the **RP2350's** serial, not one of its own — it has no unique ID
@@ -70,29 +70,54 @@ Two identities that are not ours and will show up during bring-up:
 
 Fixed **512-byte blocks**, matching the FX2's EP6 packet size. With `AUTOIN` committing every
 512 bytes, one block == one USB packet, so resynchronisation is trivial and a lost packet is
-directly visible as a sequence gap.
+directly visible as a sequence gap. The layout is `rp2350/src/block.h`; `host/bsly.py` is the
+reference reader. v0, little-endian, 28-byte naturally aligned header:
 
 ```
-struct block {           // exactly 512 bytes
-    u32 magic;           // 'BSLY' 0x594C5342 — resync anchor
-    u16 version;         // 0 for now
-    u16 type;            // see below
-    u32 session;         // from the ARM reply; discard blocks from stale sessions
-    u32 seq;             // monotonic per session, +1 per block; gaps == loss
-    u64 ts;              // RP2350 tick at the FIRST sample in this block
-    u16 payload_len;     // valid bytes in payload[]
-    u16 flags;
-    u8  payload[488];
+struct block {              // exactly 512 bytes
+    u32 magic;              // 'BSLY' 0x594C5342 -- resync anchor
+    u8  version;            // 0
+    u8  type;               // see below
+    u8  stream;             // SAMPLES/OVERRUN: which stream (SESSION lists them); else 0
+    u8  flags;              // 0
+    u32 session;            // from the `arm` reply; blocks of other sessions are stale
+    u32 seq;                // per session, every block, +1; a gap is loss
+    u64 sample;             // SAMPLES/OVERRUN: stream sample index of the first sample
+                            // covered; END: total samples; SESSION: 0
+    u16 payload_len;        // valid bytes in payload[]
+    u16 reserved;
+    u8  payload[484];
 };
 ```
 
-| type | Meaning |
-|---|---|
-| 0 | `SESSION` — payload is the session header: tick rate, sample rate, channel mask, firmware versions |
-| 1 | `SAMPLES` — raw sampled bytes, one byte per sample of the GP16–23 group |
-| 2 | `OVERRUN` — payload says how many samples were lost and when. **Emitted inline**, so the gap is located in the stream, not just counted in a status register |
-| 3 | `IDLE` — heartbeat when armed but nothing captured; keeps `ts` advancing and proves the pipe is alive |
-| 4 | `EVENT` — decoded/annotated events, once there is anything to annotate |
+| type | Meaning | Payload |
+|---|---|---|
+| 0 | `SESSION` — always the first block (seq 0) | timebase, arm time, firmware/serial/hw strings, then one 20-byte descriptor per stream: id, encoding, first pin, pin count, rate = `rate_num/rate_den` Hz exactly, source name |
+| 1 | `SAMPLES` | samples of `stream`, starting at sample index `sample`, in the stream's encoding |
+| 2 | `OVERRUN` | `u64 lost`: samples `sample .. sample+lost-1` of `stream` were dropped. **Inline**, so the gap is located in the stream, not just counted |
+| 3 | `IDLE` | reserved: heartbeat for event-driven encodings |
+| 4 | `EVENT` | reserved: annotations |
+| 5 | `END` — always the last block | `u32 blocks` (END included), `u32 overruns`, `u64 lost`. The host knows it has the whole session |
+
+**Streams.** A session carries one or more sample streams, each with its own pins, rate and
+encoding, all on one timebase: sample *n* of a stream is at `n × rate_den / rate_num` seconds
+after `arm_time`. v0 has one stream, `ENC_RAW16`: a `u16` per sample, bit *n* = GP(16+*n*), so
+every CF signal in one word. Raw fixed-rate sampling means the host sees real timing: clock
+stretching, setup/hold, glitches, a missing STOP. Protocol decoding happens on the host.
+
+The stream field exists because one rate cannot serve everything. The slow buses (I²C,
+UART, 1-Wire, IO) are well served by 10–20 Msps raw. SPI at up to ~20 MHz needs ~80 Msps, which
+no raw 16-channel stream fits through 37.5 MB/s. The fast SPI group will be a second stream
+with its own encoding (time-boxed burst, edge/RLE, or SCK-clocked capture: stage 4), without a
+format change.
+
+**Rates that fit.** RP2350 Full-Speed sink: 768 kB/s measured, so ~380 ksps raw16. FX2 sink:
+37.5 MB/s, so 18.75 Msps raw16 (stage 5).
+
+**Loss.** A source samples into a RAM ring. When the sink falls behind by more than the ring,
+the source drops down to half full and emits one `OVERRUN` covering exactly the dropped range.
+Loss then comes in a few large chunks, with long contiguous runs between them, instead of an
+`OVERRUN` block after every block eating the bandwidth.
 
 Design rules that follow from this:
 
@@ -103,6 +128,21 @@ Design rules that follow from this:
   tail of the capture is invisible.
 - **Never report loss only over the control channel.** An `OVERRUN` block in the right place
   is worth more than a counter.
+- **The `disarm` reply does not mean the stream is drained.** Read until `END`.
+
+**On disk:** `host/bsly.py` writes sigrok session files (`.sr`: a zip of `version`, INI
+`metadata`, and raw `logic-1-N` chunks). PulseView and `sigrok-cli` open them, and
+libsigrokdecode's decoders (I²C, SPI, UART, 1-Wire, …) run on them unchanged. Overrun gaps are
+filled by holding the last value and are reported by the tool, since `.sr` cannot mark them.
+
+## Transports
+
+**RP2350:** one composite device, `35F0:DB12`. Interfaces 0+1 are CDC, the ASCII control
+channel below. Interface 2 is vendor-specific with bulk IN `0x83`, the capture stream. MS OS 2.0
+descriptors bind WinUSB to interface 2 only (CDC keeps its inbox driver). Host tools claim
+interface 2 with libusb and read it exactly like the FX2's EP6.
+
+**FX2:** `35F0:DB13`, vendor-specific, bulk IN `0x86` (EP6), same blocks.
 
 ## Control channel
 
@@ -115,15 +155,16 @@ stream format is unaffected.
 > ver                        < ver rp2350=0.1.0 fx2=0.1.0 hw=v1
 > id                         < id serial=E66038B7134C2F27
 > stat                       < stat armed=1 session=7 blocks=120345 overruns=0 fx2=up
-> arm <rate_hz> <mask> <sink>
-                             < arm ok session=8
-> disarm                     < disarm ok session=8 blocks=200000 overruns=2
+> arm <rate_hz>              < arm ok session=3852125629 rate=100000 source=counter sink=usb
+> disarm                     < disarm ok session=3852125629 samples=305007 overruns=0 lost=0
 > fx2 reset|status           < fx2 ok
 > pwr vcc on|off             < pwr ok
 > pull on|off                < pull ok           (I2C pull-ups, standalone only)
 ```
 
-`sink` is `fx2` or `usb` — the same stream, different transport.
+v0 (stage 2) has the synthetic `counter` source on the `usb` sink. Pin sources, the `fx2`
+sink and stream selection extend `arm` from stage 3 on. Both carry the same blocks. `fx2 test
+start|stop` is the stage 1 raw pipe test, which bypasses the block format entirely.
 
 `arm` returns the session ID *before* any data for that session is emitted, so the host can
 reject stale blocks unambiguously even though the two channels are unordered.
@@ -133,8 +174,7 @@ reject stale blocks unambiguously even though the two channels are unordered.
 - ~~**Serial number into FX2 descriptors.**~~ Resolved: `mkc2.py` records the offset of the
   `BSLYSERIAL000000` placeholder in the generated header, and `fx2_boot.c` patches the RP2350's
   16-character unique ID over it before serving the image. Verified on hardware.
-- **CDC vs vendor on the RP2350.** CDC is easier to debug; a vendor interface with MS OS
-  descriptors gives one WinUSB backend for both devices. Possibly both, as a composite.
-- **Compression.** 8 bits/sample at 24 Msps is 24 MB/s of mostly idle. RLE or edge-plus-delta
-  encoding in PIO/DMA is the obvious next step, but it is not needed to prove the hardware —
-  keep v0 raw.
+- ~~**CDC vs vendor on the RP2350.**~~ Resolved: both, as a composite (see Transports).
+- **Compression / the fast SPI stream.** Raw fixed-rate is v0. RLE or edge-plus-delta
+  encodings become new `stream_encoding` values in SESSION, not a format change. Stage 4
+  decides how the ~20 MHz SPI group is captured.

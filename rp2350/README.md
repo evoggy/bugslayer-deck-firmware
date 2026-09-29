@@ -89,15 +89,26 @@ At power-on the RP2350 serves the FX2's boot image (`src/fx2_boot.c`, emulated E
 and brings it up, so `35F0:DB13` appears by itself with the RP2350's serial.
 
 ```
+arm 100000        # stage 2: capture session, synthetic counter source -> vendor bulk IN
+disarm            # (host: host/bsly.py capture --rate 100000 -o x.sr does both, and verifies)
 fx2 boot c2       # what the emulated EEPROM serves at the next up: c2 (default) / c0 / rom
 fx2 reboot        # FX_RESET# low, then IFCLK running and reset released
 stat              # boot=c2 eeprom_read=3389 when the FX2 read the whole image
 clk 37500000      # 5..37.5 MHz; 37.5 MHz is clkdiv 1 at 150 MHz (4 cycles/byte)
-arm
+fx2 test start    # stage 1 raw pipe test into the FX2
                   # (host: host/fx2_counter_test.py --ours --duration 60)
-disarm            # waits for queued words so the FX2 only holds whole words
+fx2 test stop     # waits for queued words so the FX2 only holds whole words
 dbg               # EP6 room (FLAGB), pad ISO, PIO PC, TX FIFO level, DMA counts
 prof              # while streaming: % writing / flow-controlled by FLAGB / starved
 ```
 
-Not yet: capture, the block framing from ../docs/protocol.md, PKTEND on disarm. See [../docs/bringup-plan.md](../docs/bringup-plan.md) stages 2–5.
+**USB:** the SDK's default stdio descriptors are replaced by our own composite
+(`src/usb_descriptors.c`, `src/tusb_config.h`): CDC for the console (stdio still works on it)
+plus a vendor bulk IN for the block stream, with MS OS 2.0 descriptors for WinUSB. The main loop
+calls `tud_task()` itself.
+
+**Stage 2:** `src/capture.c` produces the block stream from `src/block.h` (see
+../docs/protocol.md): SESSION, SAMPLES, inline OVERRUN, END, from a synthetic source on a real
+sample clock, against a modelled 64 KB capture ring.
+
+Not yet: the PIO pin sampler (stage 3), blocks into the FX2 (stage 5), PKTEND on disarm. See [../docs/bringup-plan.md](../docs/bringup-plan.md) stages 2–5.

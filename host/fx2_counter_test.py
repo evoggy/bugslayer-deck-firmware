@@ -181,12 +181,14 @@ def main():
 
     def on_transfer(transfer):
         status = transfer.getStatus()
-        if status == usb1.TRANSFER_COMPLETED:
+        # A timed-out transfer can still carry data; dropping it would look
+        # exactly like loss on the link.
+        if status in (usb1.TRANSFER_COMPLETED, usb1.TRANSFER_TIMED_OUT):
             if args.no_check:
                 checker.bytes += transfer.getActualLength()
             else:
                 checker.feed(transfer.getBuffer()[:transfer.getActualLength()])
-        elif status != usb1.TRANSFER_TIMED_OUT:
+        else:
             print(f"transfer status {status}", file=sys.stderr)
             inflight[0] -= 1
             return

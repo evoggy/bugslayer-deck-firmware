@@ -15,10 +15,13 @@
 #include "pico/unique_id.h"
 
 #include "board.h"
+#include "tusb.h"
+
+#include "capture.h"
 #include "fx2_boot.h"
 #include "fx2_link.h"
 
-#define FW_VERSION "0.1.0"
+#define FW_VERSION "0.2.0"
 
 static char s_serial[PICO_UNIQUE_BOARD_ID_SIZE_BYTES * 2 + 1];
 
@@ -59,7 +62,9 @@ static void board_init(void) {
 
 static void update_leds(void) {
     gpio_put(LED_FX2_UP, fx2_link_is_up());
-    gpio_put(LED_STREAMING, fx2_counter_running());
+    capture_status_t cs;
+    capture_status(&cs);
+    gpio_put(LED_STREAMING, fx2_counter_running() || cs.busy);
 }
 
 static void cmd_help(void) {
@@ -67,15 +72,17 @@ static void cmd_help(void) {
     puts("  ping                  -> pong");
     puts("  ver                   firmware version");
     puts("  id                    board serial (shared with the FX2 later)");
-    puts("  stat                  link and counter state");
+    puts("  stat                  capture, FX2 link and board state");
+    puts("  arm <rate_hz>         start a capture session (stage 2: synthetic counter");
+    puts("                        source, 1..2000000 Hz, blocks on the vendor bulk IN)");
+    puts("  disarm                stop sampling; the stream ends with an END block");
     puts("  clk <hz>              set IFCLK (5000000..37500000 = clkdiv 1)");
     puts("  fx2 up|down           release/assert FX_RESET# with IFCLK running");
     puts("  fx2 reboot            down, then up: the FX2 boots again");
     puts("  fx2 boot [rom|c0|c2]  what the emulated EEPROM serves at the next up:");
     puts("                        c2 = our firmware (default), c0 = our VID/PID for");
     puts("                        fx2tool RAM loads, rom = silent, 04b4:8613");
-    puts("  arm                   start the stage 1 counter stream");
-    puts("  disarm                stop it");
+    puts("  fx2 test start|stop   stage 1 pipe test: raw 32-bit counter into the FX2");
     puts("  pwr vcc|vcom on|off   high-side switches");
     puts("  pull on|off           I2C pull-ups (standalone only!)");
     puts("  dbg                   FX2 link internals (EP6 room, PIO PC, DMA)");
@@ -83,6 +90,12 @@ static void cmd_help(void) {
 }
 
 static void cmd_stat(void) {
+    capture_status_t cs;
+    capture_status(&cs);
+    printf("stat armed=%d busy=%d session=%lu rate=%lu samples=%llu blocks=%lu overruns=%lu lost=%llu\n",
+           cs.armed, cs.busy, (unsigned long)cs.session, (unsigned long)cs.rate_hz,
+           (unsigned long long)cs.samples, (unsigned long)cs.blocks,
+           (unsigned long)cs.overruns, (unsigned long long)cs.lost);
     printf("stat fx2=%s boot=%s eeprom_read=%lu ifclk=%lu counter=%s words=%llu cf_vcc=%d\n",
            fx2_link_is_up() ? "up" : "down",
            fx2_boot_mode_name(fx2_boot_get_mode()),
@@ -148,20 +161,39 @@ static void handle(char *line) {
             }
             printf("fx2 ok boot=%s (applies at the next fx2 up/reboot)\n",
                    fx2_boot_mode_name(fx2_boot_get_mode()));
+        } else if (!strcmp(a1, "test") && a2 && !strcmp(a2, "start")) {
+            if (!fx2_link_is_up()) {
+                puts("err fx2 is down; run `fx2 up` first");
+            } else {
+                fx2_counter_start();
+                puts("fx2 ok test running source=counter");
+            }
+        } else if (!strcmp(a1, "test") && a2 && !strcmp(a2, "stop")) {
+            fx2_counter_stop();
+            printf("fx2 ok test stopped words=%llu flushed=%s\n",
+                   (unsigned long long)fx2_counter_words(),
+                   fx2_counter_flushed() ? "yes" : "no");
         } else {
-            puts("err usage: fx2 up|down|reboot|boot");
+            puts("err usage: fx2 up|down|reboot|boot|test");
         }
     } else if (!strcmp(cmd, "arm")) {
-        if (!fx2_link_is_up()) {
-            puts("err fx2 is down; run `fx2 up` first");
+        uint32_t session;
+        uint32_t rate = a1 ? (uint32_t)strtoul(a1, NULL, 0) : 0;
+        if (!a1) {
+            puts("err usage: arm <rate_hz>");
+        } else if (!capture_arm(rate, &session)) {
+            puts("err already armed, or rate out of range (1..2000000)");
         } else {
-            fx2_counter_start();
-            puts("arm ok source=counter sink=fx2");
+            printf("arm ok session=%lu rate=%lu source=counter sink=usb\n",
+                   (unsigned long)session, (unsigned long)rate);
         }
     } else if (!strcmp(cmd, "disarm")) {
-        fx2_counter_stop();
-        printf("disarm ok words=%llu flushed=%s\n", (unsigned long long)fx2_counter_words(),
-               fx2_counter_flushed() ? "yes" : "no");
+        capture_status_t cs;
+        capture_disarm();
+        capture_status(&cs);
+        printf("disarm ok session=%lu samples=%llu overruns=%lu lost=%llu\n",
+               (unsigned long)cs.session, (unsigned long long)cs.samples,
+               (unsigned long)cs.overruns, (unsigned long long)cs.lost);
     } else if (!strcmp(cmd, "pwr") && a1 && a2) {
         uint pin = !strcmp(a1, "vcc") ? PIN_EXT_VCC_EN
                  : !strcmp(a1, "vcom") ? PIN_EXT_VCOM_EN : 0xff;
@@ -180,6 +212,9 @@ static void handle(char *line) {
 }
 
 int main(void) {
+    // We own TinyUSB (composite CDC + vendor, usb_descriptors.c); stdio rides
+    // on CDC 0 and expects the stack to be up before it starts.
+    tusb_init();
     stdio_init_all();
     board_init();
     fx2_boot_init(s_serial);
@@ -202,7 +237,10 @@ int main(void) {
         }
         update_leds();
 
-        int ch = getchar_timeout_us(1000);
+        tud_task();
+        capture_poll();
+
+        int ch = getchar_timeout_us(0);
         if (ch == PICO_ERROR_TIMEOUT) continue;
         if (ch == '\r' || ch == '\n') {
             if (len) {

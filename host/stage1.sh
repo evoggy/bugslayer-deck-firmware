@@ -12,14 +12,14 @@ PY=${PY:-.venv/bin/python}
 FX2TOOL=${FX2TOOL:-.venv/bin/fx2tool}
 
 if [ "${BOOT:-c2}" = ram ]; then
-    $PY bslyctl.py disarm "fx2 boot rom" "fx2 reboot" "clk ${IFCLK:-37500000}"
+    $PY bslyctl.py "fx2 test stop" "fx2 boot rom" "fx2 reboot" "clk ${IFCLK:-37500000}"
     sleep 2   # boot ROM enumerates as 04b4:8613
     $FX2TOOL -d 04b4:8613 load ../fx2/bugslayer-fx2.ihex
 else
     # The RP2350 serves the C2 image; the FX2 boots our firmware by itself.
-    $PY bslyctl.py disarm "fx2 boot c2" "fx2 reboot" "clk ${IFCLK:-37500000}"
+    $PY bslyctl.py "fx2 test stop" "fx2 boot c2" "fx2 reboot" "clk ${IFCLK:-37500000}"
 fi
 sleep 2   # 35f0:db13 enumerates
-$PY bslyctl.py arm stat
+$PY bslyctl.py "fx2 test start" stat
 $PY fx2_counter_test.py --ours --duration "${DURATION:-60}"
 $PY fx2_counter_test.py --ours --stall "${STALL_ROUNDS:-10}"

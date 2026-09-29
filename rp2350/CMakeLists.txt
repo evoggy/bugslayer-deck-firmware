@@ -15,6 +15,9 @@ add_executable(bugslayer_deck
     src/main.c
     src/fx2_link.c
     src/fx2_boot.c
+    src/capture.c
+    src/usb_stream.c
+    src/usb_descriptors.c
 )
 
 pico_generate_pio_header(bugslayer_deck ${CMAKE_CURRENT_LIST_DIR}/pio/fx2_write.pio)
@@ -28,19 +31,18 @@ target_link_libraries(bugslayer_deck
     hardware_dma
     hardware_i2c
     pico_i2c_slave
+    pico_rand
+    # Our own TinyUSB configuration and descriptors (src/tusb_config.h,
+    # src/usb_descriptors.c). pico_stdio_usb sees tinyusb_device and runs on CDC 0.
+    tinyusb_device
+    tinyusb_board
 )
 
 # Control plane on the RP2350's own USB; nothing goes to a UART.
 pico_enable_stdio_usb(bugslayer_deck 1)
 pico_enable_stdio_uart(bugslayer_deck 0)
 
-# USB identity. The serial string is already the flash unique ID, which is what
-# the host uses to pair this device with the deck's FX2 (docs/protocol.md).
-target_compile_definitions(bugslayer_deck PRIVATE
-    USBD_VID=0x35F0
-    USBD_PID=0xDB12
-    USBD_MANUFACTURER="Bitcraze AB"
-    USBD_PRODUCT="Bugslayer deck ctrl"  # the SDK caps strings at 19 chars
-)
+# USB identity and descriptors live in src/usb_descriptors.c: 35F0:DB12, serial
+# = flash unique ID, which the host uses to pair this device with the FX2.
 
 pico_add_extra_outputs(bugslayer_deck)

@@ -27,6 +27,7 @@ Each stage has an explicit pass criterion. Do not move on without it.
 | 1.1 6 MHz | 2026-09-29 | ✅ 6.00 MB/s, 61 MB, zero gaps. **The clone's sync external-IFCLK path works** |
 | 1.2 18.75 MHz | 2026-09-29 | ✅ **60 s, 1.13 GB, 18.76 MB/s, zero gaps**. Stall test (10 fill/stall rounds) clean |
 | 1.3 → 25 MB/s | 2026-09-29 | ✅ **4-cycle engine + FX2 programmable flag.** 25.05 MB/s at 25 MHz. At clkdiv 1 (IFCLK 37.5 MHz): **60 s, 2.25 GB, 37.52 MB/s, zero gaps**, stall test clean. The engine never waits on USB, so the RP2350's clock is now the limit |
+| 2 · block stream over RP2350 USB | 2026-09-29 | ✅ `bsly.py capture`: SESSION first, session matches `arm`, zero seq gaps, every synthetic sample = its index, END totals match, `.sr` written. Clean up to 350 ksps raw16 (the Full-Speed sink carries 768 kB/s); above that, loss arrives as inline OVERRUN blocks that the verifier accounts for exactly |
 | 5 · FX2 self-boot | 2026-09-29 | ✅ RP2350 emulates the EEPROM at 0xA2 and serves the 3388-byte C2 image with its serial patched in. 20/20 reboots enumerate as `35F0:DB13` with the RP2350's serial, 0.18–0.22 s after reset release. Self-booted FX2 streams 37.55 MB/s with zero gaps. C0 and rom modes work |
 
 Two RP2350 bugs found and fixed on the way to 1.2, both now in `rp2350/README.md`:

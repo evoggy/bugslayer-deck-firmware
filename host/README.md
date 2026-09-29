@@ -9,7 +9,7 @@ repository. Nothing here should grow a UI.
 | `fx2_counter_test.py` | 1 | Read the FX2 bulk IN endpoint, verify the 32-bit counter is gap-free, print MB/s. `--stall N` is the backpressure test, `--no-check` counts bytes only |
 | `stage1.sh` | 1 | The whole stage 1 run: reboot the FX2 (self-boot; `BOOT=ram` for fx2tool), arm, 60 s stream, stall test |
 | `99-bugslayer-deck.rules` | — | udev access to `35F0:DB11/12/13` and the FX2 boot ROM `04B4:8613` |
-| `bsly.py` | 2+ | `arm` / `disarm` / `capture` over the RP2350 CDC; parse 512-byte blocks; check `seq`; write a capture file |
+| `bsly.py` | 2+ | `capture`: arm over the control CDC, read the block stream from the RP2350's vendor interface, verify it (session, seq, sample continuity, OVERRUN accounting, END totals, synthetic content) and write a sigrok `.sr` |
 | `decode_ow.py` | 3 | Decode 1-Wire from a capture and print the 64-bit deck ROM ID |
 | `decode_spi.py` | 4 | Decode SPI, auto-detecting which of IO_1–4 is CS |
 
@@ -33,9 +33,14 @@ does not exist until RP2350 firmware releases `FX_RESET#`. Wait and retry.
 
 ## Status
 
-`bslyctl.py`, `fx2_counter_test.py` and `stage1.sh` run against the rev-A prototype
-(2026-09-29). The counter checker tells a real gap (a clean jump in the counter: words lost,
-counted exactly) from a resync (the byte alignment moved: a partial word, from a disarm/arm
-seam or a byte dropped at the FIFO-full edge), and a counter restart at a seam from both.
+`bslyctl.py`, `fx2_counter_test.py`, `stage1.sh` and `bsly.py capture` run against the rev-A
+prototype (2026-09-29). The counter checker tells a real gap (a clean jump in the counter:
+words lost, counted exactly) from a resync (the byte alignment moved: a partial word, from a
+disarm/arm seam or a byte dropped at the FIFO-full edge), and a counter restart at a seam from
+both.
 
-The rest are not started.
+A bulk transfer that times out can still carry data. Both readers keep it. Dropping it lost the
+SESSION block, which is typically sent alone after a quiet spell.
+
+`decode_ow.py` and `decode_spi.py` are superseded: captures are `.sr`, so sigrok's decoders
+apply directly (`sigrok-cli -i capture.sr -P i2c:scl=SCL:sda=SDA`).
