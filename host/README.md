@@ -9,7 +9,7 @@ repository. Nothing here should grow a UI.
 | `fx2_counter_test.py` | 1 | Read the FX2 bulk IN endpoint, verify the 32-bit counter is gap-free, print MB/s. `--stall N` is the backpressure test, `--no-check` counts bytes only |
 | `stage1.sh` | 1 | The whole stage 1 run: reboot the FX2 (self-boot; `BOOT=ram` for fx2tool), arm, 60 s stream, stall test |
 | `99-bugslayer-deck.rules` | — | udev access to `35F0:DB11/12/13` and the FX2 boot ROM `04B4:8613` |
-| `bsly.py` | 2+ | `capture`: arm over the control CDC, read the block stream from the RP2350's vendor interface, verify it (session, seq, sample continuity, OVERRUN accounting, END totals, synthetic content) and write a sigrok `.sr` |
+| `bsly.py` | 2+ | `capture`: arm over the control CDC, read the block stream from the RP2350's vendor interface, verify it (session, seq, sample continuity, OVERRUN accounting, END totals, synthetic content) and write a sigrok `.sr`. `--sink fx2` for the FX2, `--spi` for the SCK-clocked SPI stream (decoded, timed from raw16, and cross-checked against raw16 when it resolves SCK). `spi <file.sr>` decodes a saved one |
 | `decode_ow.py` | 3 | Decode 1-Wire from a capture and print the 64-bit deck ROM ID |
 | `decode_spi.py` | 4 | Decode SPI, auto-detecting which of IO_1–4 is CS |
 

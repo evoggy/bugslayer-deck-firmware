@@ -24,6 +24,11 @@ enum block_type {
 // How a stream's SAMPLES payload is encoded.
 enum stream_encoding {
     ENC_RAW16 = 1,       // u16 per sample, bit n = pin first_pin + n, fixed rate
+    ENC_SCK8  = 2,       // u8 per rising SCK edge, bit n = pin first_pin + n; no
+                         // fixed rate (rate_num = rate_den = 0): an event stream.
+                         // Bit 6 (SCK) is 1 in every edge byte; a byte with bit 6
+                         // clear is a marker: CS (bits 0-3) changed after the
+                         // previous edge and at or before the one just before it
 };
 
 typedef struct {
@@ -51,7 +56,7 @@ typedef struct {
     uint8_t  n_pins;
     uint32_t rate_num;      // sample rate = rate_num / rate_den Hz, exactly
     uint32_t rate_den;
-    char     source[8];     // "counter" (synthetic) or "pins"
+    char     source[8];     // "counter" (synthetic), "pins" or "sck"
 } stream_desc_t;
 _Static_assert(sizeof(stream_desc_t) == 20, "");
 
@@ -73,6 +78,10 @@ typedef struct {
 
 typedef struct {
     uint32_t blocks;        // blocks in the session, this END included
-    uint32_t overruns;      // OVERRUN blocks emitted
-    uint64_t lost;          // samples lost in total
+    uint32_t overruns;      // OVERRUN blocks emitted, all streams
+    uint64_t lost;          // samples lost in total, all streams
+    uint8_t  n_streams;     // as in SESSION
+    uint8_t  pad[7];
+    uint64_t samples[];     // per stream, by id: total samples, lost included
+                            // (hdr.sample repeats stream 0's)
 } end_payload_t;

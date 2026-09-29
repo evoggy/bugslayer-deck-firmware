@@ -129,4 +129,16 @@ ring at 150 MHz / integer.
 **Stage 5:** `fx2_sink_*` in `src/fx2_link.c` carries the same blocks through the FX2, from a
 64-slot block ring via DMA. `capture.c` builds each block in place in whichever sink it uses.
 
-Not yet: stage 4 (the fast SPI stream). See [../docs/bringup-plan.md](../docs/bringup-plan.md).
+**Stage 4:** `pio/sck8.pio` has two programs. `sck8` pushes GP16–23 at every rising SCK edge,
+plus a `0x00` marker after an edge when CS changed. `cswatch` raises PIO IRQ flag 4 on any
+IO_1–4 change, and `sck8` reads that flag with `mov x, status` (an RP2350 feature, as is the
+4-pin IN mask `cswatch` uses). `sampler.c` runs the raw16 and sck8 rings side by side, started
+and stopped on the same cycle, and `capture.c` sends from whichever ring is fullest. Not yet
+exercised above the Flow deck's 1.31 MHz SCK.
+
+```
+arm 16666667 fx2 spi   # raw16 + the SCK-clocked stream through the FX2
+arm 300000 spi         # the same over this chip's USB: SPI stays exact, raw16 only times it
+```
+
+See [../docs/bringup-plan.md](../docs/bringup-plan.md).

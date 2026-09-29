@@ -28,6 +28,7 @@ Each stage has an explicit pass criterion. Do not move on without it.
 | 1.2 18.75 MHz | 2026-09-29 | ✅ **60 s, 1.13 GB, 18.76 MB/s, zero gaps**. Stall test (10 fill/stall rounds) clean |
 | 1.3 → 25 MB/s | 2026-09-29 | ✅ **4-cycle engine + FX2 programmable flag.** 25.05 MB/s at 25 MHz. At clkdiv 1 (IFCLK 37.5 MHz): **60 s, 2.25 GB, 37.52 MB/s, zero gaps**, stall test clean. The engine never waits on USB, so the RP2350's clock is now the limit |
 | 2 · block stream over RP2350 USB | 2026-09-29 | ✅ `bsly.py capture`: SESSION first, session matches `arm`, zero seq gaps, every synthetic sample = its index, END totals match, `.sr` written. Clean up to 350 ksps raw16 (the Full-Speed sink carries 768 kB/s); above that, loss arrives as inline OVERRUN blocks that the verifier accounts for exactly |
+| 4 · SPI, SCK-clocked | 2026-09-29 | ✅ `arm ... spi` / `bsly.py capture --spi`: stream 1 = GP16–23 at every rising SCK edge, with CS-change markers. Flow deck v2 (PMW3901, CS = IO_3, 1.31 MHz mode 3), CF rebooted via an nRF51 reset: **product ID `0x00` → `0x49`, inverse `0x5F` → `0xB6`, and all 77 register writes (power-up reset + `InitRegisters`) identical to `pmw3901.c`**. Same result over the USB sink (300 ksps raw16, SPI still exact, transactions timed from raw16 CS windows) and the FX2 (16.67 Msps: 1998 transactions in 20 s, every one byte-identical to an independent decode from raw16, zero loss). sigrok's own SPI decoder agrees on the raw16 `.sr`. **Not yet tested at 21 MHz**: no uSD or LPS deck on hand |
 | 5 · FX2 block sink | 2026-09-29 | ✅ `arm <rate> pins fx2`, `bsly.py capture --sink fx2`. **16.67 Msps raw16, 10 s, 167 M samples, 35.0 MB/s, zero loss**; 18.75 Msps overruns and accounts for it exactly; 3 ksps delivers every block plus END via idle ZLPs. Stage 1 still 37.5 MB/s on the reworked engine. **Real ground truth:** an nRF51 reset (`probe-rs reset --probe 35f0:db11-1`) re-enumerates a Flow deck v2: Search ROM and Match ROM agree on `0D D0 7B 8E 00 00 00 2D` (DS28E05, Dallas CRC OK), and Read Memory returns `bcFlow2` rev `A`, VID `BC` PID `0F`, with both CRC-32 bytes in the deck header matching. That meets stage 3's pass criterion through the FX2 |
 | 5 · FX2 self-boot | 2026-09-29 | ✅ RP2350 emulates the EEPROM at 0xA2 and serves the 3388-byte C2 image with its serial patched in. 20/20 reboots enumerate as `35F0:DB13` with the RP2350's serial, 0.18–0.22 s after reset release. Self-booted FX2 streams 37.55 MB/s with zero gaps. C0 and rom modes work |
 
@@ -172,6 +173,11 @@ the stack. Same sample group, same code path.
 ---
 
 ## Stage 4 — SPI at speed, still over the RP2350 USB where possible
+
+> **Done differently (2026-09-29).** Not time-boxed: SPI is captured *clocked by SCK*, one byte
+> per rising edge, as its own stream (`ENC_SCK8`, docs/protocol.md). That is exact at 21 MHz,
+> needs no RAM window, and at the Crazyflie's SPI duty cycle fits through either sink. The plan
+> as first written is kept below.
 
 - Same 8-bit group, higher rate. A Flow deck v2 (PMW3901 + VL53L1x) or an LPS deck (DWM1000)
   produces a burst of register initialisation at startup.

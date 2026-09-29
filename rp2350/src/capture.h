@@ -1,10 +1,12 @@
 // Capture sessions: arm/disarm, and the block stream they produce.
 //
-// One raw16 stream from either the 16 CF signals (PIO + DMA ring, stage 3) or
+// A raw16 stream from either the 16 CF signals (PIO + DMA ring, stage 3) or
 // a synthetic source whose sample n has the value (uint16_t)n (stage 2), on
 // the same sample clock model, into either sink: the RP2350's own USB or the
-// FX2. Loss is real: if the sink falls behind the ring, samples are dropped
-// and an OVERRUN block says exactly which.
+// FX2. With `spi`, a second stream carries GP16-23 once per rising SCK edge
+// (stage 4): exact SPI bits at any SCK speed, timed by the raw16 stream.
+// Loss is real: if the sink falls behind a ring, samples are dropped and an
+// OVERRUN block says exactly which, per stream.
 #pragma once
 #include <stdbool.h>
 #include <stdint.h>
@@ -24,6 +26,7 @@ typedef enum {
     ARM_BUSY,            // a session is armed or still draining
     ARM_RATE,            // rate out of range for this sink
     ARM_NO_FX2,          // FX2 link down, or its stage 1 test is running
+    ARM_USAGE,           // `spi` needs the pin source
 } capture_arm_result_t;
 
 void capture_init(void);
@@ -34,7 +37,7 @@ uint32_t capture_rate_max(capture_sink_t sink);
 // Start a session. The pin source rounds to clk_sys / integer divider; the
 // exact rate is in the SESSION block.
 capture_arm_result_t capture_arm(uint32_t rate_hz, capture_source_t source,
-                                 capture_sink_t sink, uint32_t *session);
+                                 capture_sink_t sink, bool spi, uint32_t *session);
 
 // Stop sampling. Samples already due are still sent, then an END block. If
 // the sink makes no progress for a second (nobody reading the FX2), the
@@ -51,8 +54,10 @@ typedef struct {
     uint32_t rate_hz;
     capture_source_t source;
     capture_sink_t sink;
+    bool     spi;           // the SCK-clocked stream is on
     bool     aborted;       // last session was abandoned without END
-    uint64_t samples;       // sampled so far (at disarm: total)
+    uint64_t samples;       // raw16 samples so far (at disarm: total)
+    uint64_t spi_bytes;     // SCK edges captured so far
     uint32_t blocks;        // emitted so far
     uint32_t overruns;
     uint64_t lost;

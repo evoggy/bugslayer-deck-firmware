@@ -1,0 +1,79 @@
+;
+; SCK-clocked SPI capture: one byte per rising SCK edge (stage 4).
+;
+;   IN base GP16, 8 pins : IO_1..IO_4, MISO, OW, SCK, MOSI   (bit n = GP16+n)
+;
+; The Crazyflie runs its deck SPI in mode 3 (or mode 0 as a build option);
+; both sample on the rising edge, and so does this. Up to 21 MHz SCK (uSD
+; deck, LPS fast mode); the Flow deck's PMW3901 runs 1.31 MHz.
+;
+; IN reads the same synchronised pin values that WAIT sees, so the byte is
+; the pins as they were ~1 clk_sys cycle after SCK rose -- well inside the
+; half period before the next falling edge, where MOSI and MISO change (23.8 ns
+; at 21 MHz). The loop is 5 cycles, 3 of them in SCK's high phase, so SCK up
+; to ~30 MHz is seen edge by edge at 150 MHz.
+;
+; Transaction boundaries. CS is only seen at SCK edges, so two transactions
+; back to back on the same CS would look like one. `cswatch` raises IRQ flag
+; CSWATCH_IRQ whenever IO_1..IO_4 change; after each edge this program checks
+; the flag (RP2350: `mov x, status` with STATUS_SEL = IRQ) and, if it is set,
+; clears it and emits a marker byte 0x00. Every real edge byte has bit 6 (SCK)
+; set, so a byte with bit 6 clear is always a marker. A marker right after
+; edge k means CS changed after edge k-1 and at or before edge k. (A change in
+; the one or two cycles between the IN and the check would be attributed one
+; edge early; real CS setup/hold times are far longer.)
+;
+; Nothing is produced while SCK is idle: this is an event stream, not a fixed
+; rate. Shift left with autopush at 8, so each FIFO word holds one byte in
+; bits 7:0 with GP16 in bit 0; the DMA reads it as a byte.
+
+.define public CSWATCH_IRQ 4
+
+.program sck8
+top:
+.wrap_target
+    wait 0 pin 6            ; SCK low  (IN pin 6 = GP22)
+    wait 1 pin 6            ; SCK rising edge
+    in pins, 8
+    mov x, status           ; x = ~0 if CS changed since the last edge
+    jmp !x, top
+    in null, 8              ; marker: 0x00
+    irq clear CSWATCH_IRQ
+.wrap
+
+% c-sdk {
+static inline void sck8_program_init(PIO pio, uint sm, uint offset, uint pin_base) {
+    pio_sm_config c = sck8_program_get_default_config(offset);
+    sm_config_set_in_pins(&c, pin_base);
+    sm_config_set_in_shift(&c, false /*shift_left*/, true /*autopush*/, 8);
+    sm_config_set_fifo_join(&c, PIO_FIFO_JOIN_RX);
+    sm_config_set_mov_status(&c, STATUS_IRQ_SET, CSWATCH_IRQ);
+    sm_config_set_clkdiv_int_frac8(&c, 1, 0);
+    pio_sm_init(pio, sm, offset, &c);
+}
+%}
+
+; Raise CSWATCH_IRQ whenever IO_1..IO_4 change. Only those 4 pins are read:
+; the IN pin count masks the rest to 0 (RP2350). Two cycles per poll, so a CS
+; pulse of 13 ns or more is seen.
+.program cswatch
+    mov y, pins             ; the pattern at start
+loop:
+.wrap_target
+    mov x, pins
+    jmp x!=y, changed
+.wrap
+changed:
+    mov y, x
+    irq nowait CSWATCH_IRQ
+    jmp loop
+
+% c-sdk {
+static inline void cswatch_program_init(PIO pio, uint sm, uint offset, uint pin_base) {
+    pio_sm_config c = cswatch_program_get_default_config(offset);
+    sm_config_set_in_pins(&c, pin_base);
+    sm_config_set_in_pin_count(&c, 4);
+    sm_config_set_clkdiv_int_frac8(&c, 1, 0);
+    pio_sm_init(pio, sm, offset, &c);
+}
+%}

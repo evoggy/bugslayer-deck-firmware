@@ -23,6 +23,7 @@ add_executable(bugslayer_deck
 
 pico_generate_pio_header(bugslayer_deck ${CMAKE_CURRENT_LIST_DIR}/pio/fx2_write.pio)
 pico_generate_pio_header(bugslayer_deck ${CMAKE_CURRENT_LIST_DIR}/pio/sampler.pio)
+pico_generate_pio_header(bugslayer_deck ${CMAKE_CURRENT_LIST_DIR}/pio/sck8.pio)
 
 target_include_directories(bugslayer_deck PRIVATE src)
 

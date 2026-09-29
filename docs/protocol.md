@@ -97,7 +97,7 @@ struct block {              // exactly 512 bytes
 | 2 | `OVERRUN` | `u64 lost`: samples `sample .. sample+lost-1` of `stream` were dropped. **Inline**, so the gap is located in the stream, not just counted |
 | 3 | `IDLE` | reserved: heartbeat for event-driven encodings |
 | 4 | `EVENT` | reserved: annotations |
-| 5 | `END` — always the last block | `u32 blocks` (END included), `u32 overruns`, `u64 lost`. The host knows it has the whole session |
+| 5 | `END` — always the last block | `u32 blocks` (END included), `u32 overruns`, `u64 lost` (all streams), `u8 n_streams`, 7 pad, then `u64` total samples per stream. The host knows it has the whole session |
 
 **Streams.** A session carries one or more sample streams, each with its own pins, rate and
 encoding, all on one timebase: sample *n* of a stream is at `n × rate_den / rate_num` seconds
@@ -107,9 +107,20 @@ stretching, setup/hold, glitches, a missing STOP. Protocol decoding happens on t
 
 The stream field exists because one rate cannot serve everything. The slow buses (I²C,
 UART, 1-Wire, IO) are well served by 10–20 Msps raw. SPI at up to ~20 MHz needs ~80 Msps, which
-no raw 16-channel stream fits through 37.5 MB/s. The fast SPI group will be a second stream
-with its own encoding (time-boxed burst, edge/RLE, or SCK-clocked capture: stage 4), without a
-format change.
+no raw 16-channel stream fits through 37.5 MB/s. So SPI gets a second stream (stage 4):
+
+**`ENC_SCK8` (stream 1, `arm ... spi`).** One byte per rising SCK edge: GP16–23 = IO_1–4 (the
+CS candidates), MISO, OW, SCK, MOSI. The bits are exact at any SCK the PIO can follow (~30 MHz
+at 150 MHz; the Crazyflie's fastest deck SPI is 21 MHz). Nothing is sent while SCK is idle, so
+bandwidth is 1 byte per clock only while SCK runs. SESSION gives it `rate_num = rate_den = 0`:
+it has no time axis of its own. Bit 6 (SCK) is 1 in every edge byte, so **a byte with bit 6
+clear is a marker**: CS (IO_1–4) changed after the previous edge and at or before the edge just
+before the marker. A separate PIO state machine watches CS for this. Without it, two
+transactions back to back on one CS would be indistinguishable, since CS is only sampled at SCK
+edges. Timing comes from the raw16 stream, which starts on the same `clk_sys` cycle. Its CS
+windows, taken in order, are the sck8 stream's transactions, and they resolve at any raw16 rate
+that sees CS. When raw16 also resolves SCK (≳4 samples per period), `bsly.py` decodes each
+window from raw16 too and checks that the bytes are identical.
 
 **Rates that fit.** RP2350 Full-Speed sink: 768 kB/s measured, so ~380 ksps raw16. FX2 sink:
 37.5 MB/s on the wire, of which 484/512 is payload: 35.4 MB/s, 17.7 Msps raw16. The pin
@@ -164,7 +175,8 @@ stream format is unaffected.
 > id                         < id serial=E66038B7134C2F27
 > stat                       < stat armed=1 busy=1 aborted=0 sink=fx2 session=7 blocks=120345 ...
 > arm <rate_hz> [pins|counter] [usb|fx2]
-                             < arm ok session=3852125629 rate=100000 source=pins sink=fx2
+                             < arm ok session=3852125629 rate=100000 source=pins sink=fx2 spi=0
+> arm <rate_hz> ... spi      adds stream 1, ENC_SCK8 (pins source only)
 > disarm                     < disarm ok session=3852125629 samples=305007 overruns=0 lost=0
 > fx2 reset|status           < fx2 ok
 > pwr vcc on|off             < pwr ok
@@ -186,6 +198,6 @@ reject stale blocks unambiguously even though the two channels are unordered.
   `BSLYSERIAL000000` placeholder in the generated header, and `fx2_boot.c` patches the RP2350's
   16-character unique ID over it before serving the image. Verified on hardware.
 - ~~**CDC vs vendor on the RP2350.**~~ Resolved: both, as a composite (see Transports).
-- **Compression / the fast SPI stream.** Raw fixed-rate is v0. RLE or edge-plus-delta
-  encodings become new `stream_encoding` values in SESSION, not a format change. Stage 4
-  decides how the ~20 MHz SPI group is captured.
+- ~~**The fast SPI stream.**~~ Resolved in stage 4: `ENC_SCK8`, above.
+- **Compression.** Raw fixed-rate is v0. RLE or edge-plus-delta encodings become new
+  `stream_encoding` values in SESSION, not a format change.
