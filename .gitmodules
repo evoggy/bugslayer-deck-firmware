@@ -1,3 +1,6 @@
 [submodule "fx2/libfx2"]
 	path = fx2/libfx2
 	url = https://github.com/whitequark/libfx2.git
+[submodule "rp2040/freertos"]
+	path = rp2040/freertos
+	url = https://github.com/FreeRTOS/FreeRTOS-Kernel
