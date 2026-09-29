@@ -107,7 +107,7 @@ rule is about boot ordering, not about keeping the clock alive forever.
 |---|---|---|
 | GP0 | `EXT_VCOM_EN` | SiP32431 U8 high-side switch |
 | GP1 | `EXT_VCC_EN` | SiP32431 U13 high-side switch |
-| GP2 | `EXT_I2C_PULL_EN` | 2 × 2.2 kΩ pull-ups: **high = on** (standalone). Set 8 mA drive |
+| GP2 | `EXT_I2C_PULL_EN` | **Supply** of the 2 × 2.2 kΩ SDA/SCL pull-ups (R9/R10): **high = on** (standalone), **Hi-Z = off**. ⚠️ **Never drive it low**: R9/R10 become 2.2 kΩ pull-downs on the CF's I²C bus, and the Crazyflie's STM32 does not boot (found 2026-09-29). Set 8 mA drive |
 | GP3 | `USB_UART_MUX_nEN` | TS3USB221A OE, active low. Strap R13 pulls it low = enabled |
 | GP4 | `FX_SDA` | `i2c0_sda` — RP2350 emulates the FX2 boot EEPROM at 0xA2 |
 | GP5 | `FX_SCL` | `i2c0_scl` — 2.2 kΩ pull-ups on the FX2 sheet |
@@ -121,6 +121,15 @@ rule is about boot ordering, not about keeping the clock alive forever.
 as inputs: S high (UART leg) and OE low (enabled), which passes the RP2350's Hi-Z
 UART pins through to the Crazyflie. Selecting the USB leg drives USB signalling into
 the CF's PA2/PA3, so firmware must only do that deliberately.
+
+## CF signals must be invisible
+
+When stacked on a Crazyflie the deck must not load the bus. RP2350 pads leave reset with a
+~50 kΩ **pull-down** (and isolated, input disabled). `board_init()` makes every CF signal
+(GP16–31) a plain input with **no pulls** first thing. A weak pull-up on the CF side (an nRF51
+or STM32 strap) loses to 50 kΩ, and with the GP2 mistake above it stopped the CF booting. For
+rev B, consider series resistors on the nRF51-domain lines (OW, WKUP, N_IO_1), which
+currently have none.
 
 ## GP44–47 — unconnected on rev A
 

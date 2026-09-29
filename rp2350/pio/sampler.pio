@@ -1,0 +1,34 @@
+;
+; Fixed-rate sampler: every CF expansion signal, one 16-bit sample per SM cycle.
+;
+;   IN base GP16, 16 pins : IO_1..IO_4, MISO, OW, SCK, MOSI, WKUP, N_IO_1,
+;                           TX2, RX2, TX1, RX1, SDA, SCL  (bit n = GP16+n)
+;
+; The PIO block needs gpio_base 16 (GP16-47 window) only because the FX2 writer
+; shares that setting on RP2350B; GP16-31 are reachable from either window.
+; The sample rate is clk_sys / clkdiv. Use an integer divider: a fractional one
+; spreads the samples unevenly in time, and every sample's time is derived as
+; index / rate on the host.
+;
+; Autopush at 32 bits packs two samples per word. ISR shifts right, so the
+; first sample lands in the low half: in memory the samples are consecutive
+; little-endian u16s, exactly the ENC_RAW16 block payload.
+
+.program sampler
+.wrap_target
+    in pins, 16
+.wrap
+
+% c-sdk {
+static inline void sampler_program_init(PIO pio, uint sm, uint offset, uint pin_base,
+                                        uint32_t clkdiv) {
+    pio_sm_config c = sampler_program_get_default_config(offset);
+    sm_config_set_in_pins(&c, pin_base);
+    sm_config_set_in_shift(&c, true /*shift_right*/, true /*autopush*/, 32);
+    sm_config_set_fifo_join(&c, PIO_FIFO_JOIN_RX);
+    sm_config_set_clkdiv_int_frac8(&c, clkdiv, 0);
+    // The pins stay SIO inputs: the PIO only reads them, and reading does not
+    // need a function select (inputs always reach every PIO).
+    pio_sm_init(pio, sm, offset, &c);
+}
+%}

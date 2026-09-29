@@ -243,7 +243,7 @@ def capture(args):
 
         with serial.Serial(port, timeout=0.05) as ser:
             pump(0.2)                        # drain any earlier session's tail
-            reply = command(ser, f"arm {args.rate}")
+            reply = command(ser, f"arm {args.rate} {args.source}")
             print(reply)
             if not reply.startswith("arm ok"):
                 sys.exit(1)
@@ -292,7 +292,9 @@ def capture(args):
         print(f"           {n} samples from #{first} ({first / rate:.4f} s)")
 
     if args.output and stream:
-        write_sr(args.output, v.samples(), int(rate), CHANNEL_NAMES[:stream["n_pins"]])
+        if stream["rate_num"] % stream["rate_den"]:
+            print(f"note       {rate:.3f} Hz is not an integer; the .sr says {round(rate)} Hz")
+        write_sr(args.output, v.samples(), round(rate), CHANNEL_NAMES[:stream["n_pins"]])
         print(f"wrote      {args.output}")
 
     if v.errors:
@@ -313,7 +315,11 @@ def main():
     ap.add_argument("--serial", help="pick one deck by its serial number")
     sub = ap.add_subparsers(dest="cmd", required=True)
     c = sub.add_parser("capture", help="arm, capture, disarm, verify, write .sr")
-    c.add_argument("--rate", type=int, default=100000, help="sample rate, Hz")
+    c.add_argument("--rate", type=int, default=250000,
+                   help="sample rate, Hz; the deck rounds to 150 MHz / integer, "
+                        "the exact rate is in the SESSION block")
+    c.add_argument("--source", choices=("pins", "counter"), default="pins",
+                   help="the 16 CF signals, or the synthetic counter (stage 2 test)")
     c.add_argument("--duration", type=float, default=2.0, help="seconds")
     c.add_argument("-o", "--output", help="sigrok .sr file to write")
     c.add_argument("--no-overrun", action="store_true", help="fail if any samples were lost")

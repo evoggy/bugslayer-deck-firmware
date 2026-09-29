@@ -7,6 +7,7 @@
 
 #include "block.h"
 #include "capture.h"
+#include "sampler.h"
 #include "usb_stream.h"
 
 #define FW_VERSION "0.2.0"
@@ -15,22 +16,29 @@
 #define SAMPLE_BYTES       2
 #define SAMPLES_PER_BLOCK  (BLOCK_PAYLOAD_MAX / SAMPLE_BYTES)   // 242
 
-// The capture buffer a real source will have: sampled data waits here until
-// the sink takes it. When the sink falls further behind than this, the oldest
-// samples are lost -- as they will be with PIO + DMA into a RAM ring.
-#define BUFFER_SAMPLES     (64 * 1024 / SAMPLE_BYTES)
+// The synthetic source models the capture ring the pin source really has:
+// sampled data waits there until the sink takes it, and when the sink falls
+// further behind than the ring, the oldest samples are lost.
+#define COUNTER_RING_SAMPLES (64 * 1024 / SAMPLE_BYTES)
+
+// The pin source's ring is real; leave headroom for the samples the DMA writes
+// while a block is being copied out.
+#define PINS_RING_SAMPLES    (SAMPLER_RING_SAMPLES - 4096)
 
 // Cap on blocks emitted per poll, so tud_task() and the console keep running.
 #define BLOCKS_PER_POLL    8
 
-#define RATE_MIN_HZ        1
+#define RATE_MIN_HZ        2300        // clkdiv <= 65535 at 150 MHz
 #define RATE_MAX_HZ        2000000
 
 enum state { IDLE, ARMED, DRAINING };
 
 static enum state s_state;
+static capture_source_t s_source;
 static uint32_t   s_session;
-static uint32_t   s_rate_hz;
+static uint32_t   s_rate_hz;          // as requested
+static uint32_t   s_rate_num;         // exact: rate = num / den
+static uint32_t   s_rate_den;
 static uint64_t   s_t0_us;
 static uint64_t   s_stop_at;          // total samples, fixed at disarm
 static uint64_t   s_next;             // next sample index to put in a block
@@ -45,7 +53,12 @@ static block_t    s_block;
 
 static uint64_t samples_due(void) {
     if (s_state != ARMED) return s_stop_at;
+    if (s_source == CAPTURE_PINS) return sampler_produced();
     return (time_us_64() - s_t0_us) * s_rate_hz / 1000000u;
+}
+
+static uint64_t ring_samples(void) {
+    return s_source == CAPTURE_PINS ? PINS_RING_SAMPLES : COUNTER_RING_SAMPLES;
 }
 
 static void emit(uint8_t type, uint64_t sample, uint16_t payload_len) {
@@ -79,15 +92,32 @@ static void emit_session(void) {
     s->encoding  = ENC_RAW16;
     s->first_pin = 16;           // GP16..31: every CF expansion signal
     s->n_pins    = 16;
-    s->rate_num  = s_rate_hz;
-    s->rate_den  = 1;
-    strncpy(s->source, "counter", sizeof(s->source));
+    s->rate_num  = s_rate_num;
+    s->rate_den  = s_rate_den;
+    strncpy(s->source, s_source == CAPTURE_PINS ? "pins" : "counter", sizeof(s->source));
     emit(BLOCK_SESSION, 0, (uint16_t)(sizeof(*p) + sizeof(*s)));
+}
+
+static void record_loss(uint64_t first, uint64_t n) {
+    if (!s_pending_lost) s_pending_first = first;
+    s_pending_lost += n;
+    s_lost += n;
 }
 
 static void emit_samples(uint32_t n) {
     uint16_t *out = (uint16_t *)s_block.payload;
-    for (uint32_t i = 0; i < n; i++) out[i] = (uint16_t)(s_next + i);   // synthetic: value = index
+    if (s_source == CAPTURE_PINS) {
+        sampler_copy(out, s_next, n);
+        // Did the DMA lap these samples while we copied them? Then they are
+        // not what was sampled: report them lost instead of sending them.
+        if (sampler_produced() - s_next > SAMPLER_RING_SAMPLES) {
+            record_loss(s_next, n);
+            s_next += n;
+            return;
+        }
+    } else {
+        for (uint32_t i = 0; i < n; i++) out[i] = (uint16_t)(s_next + i);   // value = index
+    }
     emit(BLOCK_SAMPLES, s_next, (uint16_t)(n * SAMPLE_BYTES));
     s_next += n;
 }
@@ -108,7 +138,11 @@ static void emit_end(void) {
     emit(BLOCK_END, s_stop_at, sizeof(*p));
 }
 
-bool capture_arm(uint32_t rate_hz, uint32_t *session) {
+void capture_init(void) {
+    sampler_init();
+}
+
+bool capture_arm(uint32_t rate_hz, capture_source_t source, uint32_t *session) {
     if (s_state != IDLE || rate_hz < RATE_MIN_HZ || rate_hz > RATE_MAX_HZ) return false;
     // Random, so a stale block from before a reboot can never match.
     do s_session = get_rand_32(); while (s_session == 0);
@@ -120,7 +154,17 @@ bool capture_arm(uint32_t rate_hz, uint32_t *session) {
     s_lost          = 0;
     s_pending_lost  = 0;
     s_session_sent  = false;
+    s_source        = source;
     s_t0_us         = time_us_64();
+    if (source == CAPTURE_PINS) {
+        // Integer divider only, so samples are evenly spaced; the rate is
+        // then exactly clk_sys / clkdiv, which is what SESSION reports.
+        uint32_t clkdiv = (clock_get_hz(clk_sys) + rate_hz / 2) / rate_hz;
+        sampler_start(clkdiv, &s_rate_num, &s_rate_den);
+    } else {
+        s_rate_num = rate_hz;
+        s_rate_den = 1;
+    }
     s_state         = ARMED;
     *session = s_session;
     return true;
@@ -128,6 +172,7 @@ bool capture_arm(uint32_t rate_hz, uint32_t *session) {
 
 void capture_disarm(void) {
     if (s_state != ARMED) return;
+    if (s_source == CAPTURE_PINS) sampler_stop();
     s_stop_at = samples_due();
     s_state   = DRAINING;
 }
@@ -145,16 +190,14 @@ void capture_poll(void) {
 
         uint64_t due = samples_due();
 
-        // The buffer model: when the sink is more than BUFFER_SAMPLES behind,
-        // the buffer has overflowed. Drop down to half full rather than just
-        // to full: loss then comes in a few large, well-separated chunks, and
-        // what survives is long contiguous runs instead of a sample-by-sample
-        // trickle with an OVERRUN block eating the bandwidth after every block.
-        if (due - s_next > BUFFER_SAMPLES) {
-            uint64_t lost = due - s_next - BUFFER_SAMPLES / 2;
-            if (!s_pending_lost) s_pending_first = s_next;
-            s_pending_lost += lost;
-            s_lost += lost;
+        // When the sink is more than a ring behind, the ring has overflowed.
+        // Drop down to half full rather than just to full: loss then comes in
+        // a few large, well-separated chunks, and what survives is long
+        // contiguous runs instead of a sample-by-sample trickle with an
+        // OVERRUN block eating the bandwidth after every block.
+        if (due - s_next > ring_samples()) {
+            uint64_t lost = due - s_next - ring_samples() / 2;
+            record_loss(s_next, lost);
             s_next += lost;
         }
 
@@ -185,6 +228,7 @@ void capture_status(capture_status_t *st) {
     st->busy     = s_state != IDLE;
     st->session  = s_session;
     st->rate_hz  = s_rate_hz;
+    st->source   = s_source;
     st->samples  = samples_due();
     st->blocks   = s_seq;
     st->overruns = s_overruns;

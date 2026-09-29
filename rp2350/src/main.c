@@ -36,13 +36,28 @@ static void board_init(void) {
     const uint outputs[] = {
         PIN_EXT_VCOM_EN,      // both high-side switches off
         PIN_EXT_VCC_EN,
-        PIN_EXT_I2C_PULL_EN,  // no pull-ups: assume we are stacked on a CF
         PIN_LED_1, PIN_LED_2, PIN_LED_3, PIN_LED_4, PIN_LED_5,
     };
     for (uint i = 0; i < count_of(outputs); i++) {
         gpio_init(outputs[i]);
         gpio_put(outputs[i], 0);
         gpio_set_dir(outputs[i], GPIO_OUT);
+    }
+
+    // I2C pull-ups off. R9/R10 (2.2k) run from SDA/SCL to this pin: it is
+    // their supply. Driving it LOW would make them 2.2k pull-DOWNS on the
+    // Crazyflie's I2C bus -- which stopped the CF's STM32 from booting. Off is
+    // Hi-Z; `pull on` drives it high.
+    gpio_init(PIN_EXT_I2C_PULL_EN);
+    gpio_disable_pulls(PIN_EXT_I2C_PULL_EN);
+
+    // Every CF signal (GP16-31) a plain input: no pulls, input buffer on,
+    // pad isolation released. Out of reset the pads have a ~50k pull-down,
+    // which a weak pull-up on the CF side cannot beat. Sniffing must be
+    // invisible to the Crazyflie.
+    for (uint pin = PIN_CAP_BASE; pin < PIN_CAP_BASE + 16; pin++) {
+        gpio_init(pin);
+        gpio_disable_pulls(pin);
     }
 
     // The USB/UART mux pins stay inputs: the straps (R32 up, R13 down) select
@@ -73,8 +88,10 @@ static void cmd_help(void) {
     puts("  ver                   firmware version");
     puts("  id                    board serial (shared with the FX2 later)");
     puts("  stat                  capture, FX2 link and board state");
-    puts("  arm <rate_hz>         start a capture session (stage 2: synthetic counter");
-    puts("                        source, 1..2000000 Hz, blocks on the vendor bulk IN)");
+    puts("  arm <rate_hz> [pins|counter]");
+    puts("                        start a capture session into the vendor bulk IN:");
+    puts("                        the 16 CF signals (default) or a synthetic counter.");
+    puts("                        2300..2000000 Hz; ~380 ksps is what USB FS carries");
     puts("  disarm                stop sampling; the stream ends with an END block");
     puts("  clk <hz>              set IFCLK (5000000..37500000 = clkdiv 1)");
     puts("  fx2 up|down           release/assert FX_RESET# with IFCLK running");
@@ -84,7 +101,8 @@ static void cmd_help(void) {
     puts("                        fx2tool RAM loads, rom = silent, 04b4:8613");
     puts("  fx2 test start|stop   stage 1 pipe test: raw 32-bit counter into the FX2");
     puts("  pwr vcc|vcom on|off   high-side switches");
-    puts("  pull on|off           I2C pull-ups (standalone only!)");
+    puts("  pull on|off           I2C pull-ups (standalone only!); off = Hi-Z, never low");
+    puts("  pins                  live level of every CF signal");
     puts("  dbg                   FX2 link internals (EP6 room, PIO PC, DMA)");
     puts("  prof                  write engine: streaming / flow-controlled / starved");
 }
@@ -179,13 +197,14 @@ static void handle(char *line) {
     } else if (!strcmp(cmd, "arm")) {
         uint32_t session;
         uint32_t rate = a1 ? (uint32_t)strtoul(a1, NULL, 0) : 0;
-        if (!a1) {
-            puts("err usage: arm <rate_hz>");
-        } else if (!capture_arm(rate, &session)) {
-            puts("err already armed, or rate out of range (1..2000000)");
+        capture_source_t src = (a2 && !strcmp(a2, "counter")) ? CAPTURE_COUNTER : CAPTURE_PINS;
+        if (!a1 || (a2 && strcmp(a2, "counter") && strcmp(a2, "pins"))) {
+            puts("err usage: arm <rate_hz> [pins|counter]");
+        } else if (!capture_arm(rate, src, &session)) {
+            puts("err already armed, or rate out of range (2300..2000000)");
         } else {
-            printf("arm ok session=%lu rate=%lu source=counter sink=usb\n",
-                   (unsigned long)session, (unsigned long)rate);
+            printf("arm ok session=%lu rate=%lu source=%s sink=usb\n", (unsigned long)session,
+                   (unsigned long)rate, src == CAPTURE_PINS ? "pins" : "counter");
         }
     } else if (!strcmp(cmd, "disarm")) {
         capture_status_t cs;
@@ -203,8 +222,21 @@ static void handle(char *line) {
             gpio_put(pin, !strcmp(a2, "on"));
             printf("pwr ok %s=%s\n", a1, a2);
         }
+    } else if (!strcmp(cmd, "pins")) {
+        static const char *names[16] = {"IO_1", "IO_2", "IO_3", "IO_4", "MISO", "OW", "SCK",
+                                        "MOSI", "WKUP", "N_IO_1", "TX2", "RX2", "TX1", "RX1",
+                                        "SDA", "SCL"};
+        printf("pins");
+        for (uint i = 0; i < 16; i++) printf(" %s=%d", names[i], gpio_get(PIN_CAP_BASE + i));
+        printf(" cf_vcc=%d\n", gpio_get(PIN_EXT_VCC_SENSE));
     } else if (!strcmp(cmd, "pull") && a1) {
-        gpio_put(PIN_EXT_I2C_PULL_EN, !strcmp(a1, "on"));
+        // Pull-up supply: high = 2.2k pull-ups on (standalone only), Hi-Z = off.
+        if (!strcmp(a1, "on")) {
+            gpio_put(PIN_EXT_I2C_PULL_EN, 1);
+            gpio_set_dir(PIN_EXT_I2C_PULL_EN, GPIO_OUT);
+        } else {
+            gpio_set_dir(PIN_EXT_I2C_PULL_EN, GPIO_IN);
+        }
         printf("pull ok %s\n", a1);
     } else {
         printf("err unknown command '%s' (try `help`)\n", cmd);
@@ -219,6 +251,7 @@ int main(void) {
     board_init();
     fx2_boot_init(s_serial);
     fx2_link_init();
+    capture_init();
 
     // The deck is one device to the user: the FX2 boots with the RP2350.
     fx2_up();

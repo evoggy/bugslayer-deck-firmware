@@ -16,11 +16,13 @@ add_executable(bugslayer_deck
     src/fx2_link.c
     src/fx2_boot.c
     src/capture.c
+    src/sampler.c
     src/usb_stream.c
     src/usb_descriptors.c
 )
 
 pico_generate_pio_header(bugslayer_deck ${CMAKE_CURRENT_LIST_DIR}/pio/fx2_write.pio)
+pico_generate_pio_header(bugslayer_deck ${CMAKE_CURRENT_LIST_DIR}/pio/sampler.pio)
 
 target_include_directories(bugslayer_deck PRIVATE src)
 
