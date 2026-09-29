@@ -98,7 +98,7 @@ enumerate behind the hub, and the RP2350 → FX2 → PC pipe carries 37.5 MB/s w
 
 | Firmware | Status |
 |---|---|
-| `rp2350/` | stage 0 + 1 — CDC command loop, FX2 link, PIO write engine, counter DMA. **Passes stage 1 on hardware** |
+| `rp2350/` | CDC command loop, FX2 self-boot, PIO pin sampler, block stream into its own USB or the FX2. **16.67 Msps through the FX2 with zero loss** |
 | `rp2040/` | 4-port CMSIS-DAP (MultiProbe port). **Runs**: four probes listed, SWD4 flashes the RP2350 |
 | `fx2/` | stage 1 — slave FIFO + WinUSB descriptors. **Passes stage 1 on hardware** (RAM-loaded) |
 | `host/` | `bslyctl.py`, `fx2_counter_test.py`, `stage1.sh`; see [host/README.md](host/README.md) |

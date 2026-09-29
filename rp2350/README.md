@@ -35,7 +35,7 @@ registers, and with `IFCLKSRC=0` that block is clocked from GP40 — a dead cloc
 `fx2_write.pio`'s `clk_only` entry point exists for exactly this. Afterwards the FX2 does no
 register writes, so a stalled write engine freezing the clock is harmless.
 
-## Two things that bit on hardware (2026-09-29)
+## Three things that bit on hardware (2026-09-29)
 
 **Input-only pins need a function select.** RP2350 pads power up *isolated* (`PADS_BANK0`
 ISO bit), and only `gpio_set_function()` clears it. `gpio_set_input_enabled()` alone is not
@@ -51,6 +51,17 @@ relative to the PIO's GPIO base: GP43 → bit 27) fixed it at 8 cycles/byte. The
 structural: FLAGB is now the FX2's *programmable* flag with 16 bytes of slack, so latency no
 longer matters, the synchronizer is back on, and the engine runs at 4 cycles/byte.
 `host/fx2_counter_test.py --stall` is the regression test.
+
+**Never stop IFCLK while the FX2 is working.** The first engine stalled on an empty TX FIFO
+(autopull `out`) with IFCLK frozen, which the comments called harmless. The FX2's FIFO logic,
+including the `AUTOIN` commit of a just-filled packet, runs on IFCLK. The stage 1 counter
+never ran dry, so it never noticed. The block sink runs dry at the end of every block, which is
+exactly a packet boundary. After a few dozen packets EP6 sat full, with nothing going to the
+host, until the FX2 was reset. The engine now pulls explicitly once per word. In the
+IFCLK-high cycles it checks whether there is a next word (`mov x, status`, TX FIFO empty) and
+room for it (`jmp pin`). If either is missing, it waits in `stall` with the clock running and
+SLWR# released. That is still 4 cycles/byte. A related bug: `clk_only` did not release SLWR#,
+so parking the engine there after a stalled OUT clocked junk into EP6.
 
 ## Layout
 
@@ -89,8 +100,9 @@ At power-on the RP2350 serves the FX2's boot image (`src/fx2_boot.c`, emulated E
 and brings it up, so `35F0:DB13` appears by itself with the RP2350's serial.
 
 ```
-arm 100000        # stage 2: capture session, synthetic counter source -> vendor bulk IN
-disarm            # (host: host/bsly.py capture --rate 100000 -o x.sr does both, and verifies)
+arm 100000        # capture session: CF pins -> this chip's vendor bulk IN (<=~380 ksps)
+arm 16666667 fx2  # CF pins -> the FX2's EP6 (<=16.67 Msps clean); `counter` = synthetic
+disarm            # (host: host/bsly.py capture [--sink fx2] --rate N -o x.sr does both, and verifies)
 fx2 boot c2       # what the emulated EEPROM serves at the next up: c2 (default) / c0 / rom
 fx2 reboot        # FX_RESET# low, then IFCLK running and reset released
 stat              # boot=c2 eeprom_read=3389 when the FX2 read the whole image
@@ -99,7 +111,7 @@ fx2 test start    # stage 1 raw pipe test into the FX2
                   # (host: host/fx2_counter_test.py --ours --duration 60)
 fx2 test stop     # waits for queued words so the FX2 only holds whole words
 dbg               # EP6 room (FLAGB), pad ISO, PIO PC, TX FIFO level, DMA counts
-prof              # while streaming: % writing / flow-controlled by FLAGB / starved
+prof              # while streaming: % writing / waiting on FLAGB (stall) / waiting on data (starved)
 ```
 
 **USB:** the SDK's default stdio descriptors are replaced by our own composite
@@ -111,4 +123,10 @@ calls `tud_task()` itself.
 ../docs/protocol.md): SESSION, SAMPLES, inline OVERRUN, END, from a synthetic source on a real
 sample clock, against a modelled 64 KB capture ring.
 
-Not yet: the PIO pin sampler (stage 3), blocks into the FX2 (stage 5), PKTEND on disarm. See [../docs/bringup-plan.md](../docs/bringup-plan.md) stages 2–5.
+**Stage 3:** `src/sampler.c` + `pio/sampler.pio` sample the 16 CF signals into a 128 KB DMA
+ring at 150 MHz / integer.
+
+**Stage 5:** `fx2_sink_*` in `src/fx2_link.c` carries the same blocks through the FX2, from a
+64-slot block ring via DMA. `capture.c` builds each block in place in whichever sink it uses.
+
+Not yet: stage 4 (the fast SPI stream). See [../docs/bringup-plan.md](../docs/bringup-plan.md).

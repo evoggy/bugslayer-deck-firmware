@@ -39,8 +39,14 @@ words lost, counted exactly) from a resync (the byte alignment moved: a partial 
 disarm/arm seam or a byte dropped at the FIFO-full edge), and a counter restart at a seam from
 both.
 
-A bulk transfer that times out can still carry data. Both readers keep it. Dropping it lost the
-SESSION block, which is typically sent alone after a quiet spell.
+A bulk transfer that times out can still carry data. The USB-sink reader keeps it. Dropping it
+lost the SESSION block, which is typically sent alone after a quiet spell. The FX2 reader
+(`bsly.py capture --sink fx2`) uses no timeout at all: cancelling a part-filled High Speed
+transfer lost packets. Instead the deck ends transfers with a zero-length packet whenever it
+goes quiet. The FX2 reader finds the FX2 by the control port's serial, reads whole packets
+(one packet = one block), drops a short packet (a flushed partial block from an earlier
+session), and verifies each transfer with numpy. Per-block Python cannot keep up with ~70k
+blocks/s.
 
 `decode_ow.py` and `decode_spi.py` are superseded: captures are `.sr`, so sigrok's decoders
 apply directly (`sigrok-cli -i capture.sr -P i2c:scl=SCL:sda=SDA`).

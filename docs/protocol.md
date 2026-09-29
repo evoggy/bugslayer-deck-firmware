@@ -112,7 +112,10 @@ with its own encoding (time-boxed burst, edge/RLE, or SCK-clocked capture: stage
 format change.
 
 **Rates that fit.** RP2350 Full-Speed sink: 768 kB/s measured, so ~380 ksps raw16. FX2 sink:
-37.5 MB/s, so 18.75 Msps raw16 (stage 5).
+37.5 MB/s on the wire, of which 484/512 is payload: 35.4 MB/s, 17.7 Msps raw16. The pin
+sampler runs at 150 MHz / integer, so the fastest clean rate is **16.67 Msps** (÷9, 35.0 MB/s,
+measured zero loss over 10 s). `arm` accepts up to 18.75 Msps (÷8); the excess arrives as
+OVERRUN blocks.
 
 **Loss.** A source samples into a RAM ring. When the sink falls behind by more than the ring,
 the source drops down to half full and emits one `OVERRUN` covering exactly the dropped range.
@@ -123,9 +126,14 @@ Design rules that follow from this:
 
 - **All timestamps come from the RP2350.** It is the only thing that sees the bus. Host
   arrival times are worthless — never mix them in.
-- **The RP2350 always writes whole 512-byte blocks to the FX2.** Short writes at capture stop
-  are padded and committed with `PKTEND`, otherwise up to 511 bytes sit in the FIFO and the
-  tail of the capture is invisible.
+- **The RP2350 only ever writes whole 512-byte blocks to the FX2**, so with `AUTOIN` every
+  block is exactly one USB packet and nothing is ever stranded in a partial packet. `PKTEND`
+  is used for two other things. At sink start it flushes any partial packet an aborted session
+  or the stage 1 test left in EP6, and the host drops that short packet. Whenever the sink has
+  been quiet for 1 ms, including after `END`, it commits a zero-length packet. That completes
+  the host's pending bulk transfer, so the host can read with no timeout (cancelling a
+  part-filled High Speed transfer can lose the packets in it) and low-rate blocks still arrive
+  promptly.
 - **Never report loss only over the control channel.** An `OVERRUN` block in the right place
   is worth more than a counter.
 - **The `disarm` reply does not mean the stream is drained.** Read until `END`.
@@ -154,17 +162,20 @@ stream format is unaffected.
 > ping                       < pong
 > ver                        < ver rp2350=0.1.0 fx2=0.1.0 hw=v1
 > id                         < id serial=E66038B7134C2F27
-> stat                       < stat armed=1 session=7 blocks=120345 overruns=0 fx2=up
-> arm <rate_hz>              < arm ok session=3852125629 rate=100000 source=counter sink=usb
+> stat                       < stat armed=1 busy=1 aborted=0 sink=fx2 session=7 blocks=120345 ...
+> arm <rate_hz> [pins|counter] [usb|fx2]
+                             < arm ok session=3852125629 rate=100000 source=pins sink=fx2
 > disarm                     < disarm ok session=3852125629 samples=305007 overruns=0 lost=0
 > fx2 reset|status           < fx2 ok
 > pwr vcc on|off             < pwr ok
 > pull on|off                < pull ok           (I2C pull-ups, standalone only)
 ```
 
-v0 (stage 2) has the synthetic `counter` source on the `usb` sink. Pin sources, the `fx2`
-sink and stream selection extend `arm` from stage 3 on. Both carry the same blocks. `fx2 test
-start|stop` is the stage 1 raw pipe test, which bypasses the block format entirely.
+`arm` takes a source (`pins`, the 16 CF signals, default, or the synthetic `counter`) and a
+sink (`usb`, default, or `fx2`), in either order. Both sinks carry the same blocks. If a
+draining session's sink takes nothing for 1 s (nobody reading the FX2), the session is abandoned
+without `END` and `stat` shows `aborted=1`. `fx2 test start|stop` is the stage 1 raw pipe test,
+which bypasses the block format entirely, and it cannot run while a session holds the FX2.
 
 `arm` returns the session ID *before* any data for that session is emitted, so the host can
 reject stale blocks unambiguously even though the two channels are unordered.

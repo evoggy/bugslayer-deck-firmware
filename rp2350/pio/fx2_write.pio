@@ -14,48 +14,85 @@
 ; the engine spends real time in `stall`. tIFCLK must stay inside 20.83..200 ns
 ; (CBM9002A datasheet p.17, identical to the Cypress FX2LP spec).
 ;
+; IFCLK never stops while the engine runs. The FX2's FIFO logic, including the
+; AUTOIN commit of a just-filled packet, runs on IFCLK. The first version of
+; this engine stalled on an empty TX FIFO with the clock frozen. The stage 1
+; counter never ran dry, so it did not notice, but the block sink runs dry at
+; the end of every block -- a packet boundary. There the FX2 stopped for good
+; after a few dozen packets, with EP6 full and nothing going to the host. So
+; the engine moves data a word at a time and checks, once per word, whether
+; there is a next word (`mov x, status`, TX FIFO empty) and room for it
+; (`jmp pin`). If either is missing it waits in `stall` with the clock running
+; and SLWR# released. The checks fit in the IFCLK-high cycles, so the rate is
+; still 4 cycles per byte.
+;
 ; Timing at 150 MHz (6.67 ns/cycle), against the rising edge the FX2 samples on:
-;   FD driven       2 cyc = 13.3 ns before  (tSFD >= 3.2 ns)   OK
+;   FD driven       1 cyc =  6.7 ns before  (tSFD >= 3.2 ns)   OK  (b0; 2 cyc b1-b3)
 ;   FD held         2 cyc = 13.3 ns after   (tFDH >= 4.5 ns)   OK
 ;   SLWR# asserted  3 cyc = 20.0 ns before  (tSWR >= 12.1 ns)  OK  (enter)
 ;   SLWR# released  3 cyc = 20.0 ns before  (tSWR >= 12.1 ns)  OK  (stall)
+;   PKTEND# asserted 3 cyc = 20.0 ns before (tSPE >= 14.6 ns)  OK  (pktend)
 ;
 ; Flow control does not depend on flag timing. FLAGB is the EP6 programmable
 ; flag, set in the FX2 firmware to assert PF_SLACK (16) bytes before EP6 is
-; full. `jmp pin` sees it a couple of IFCLKs late -- the input synchronizer
-; adds 2 cycles, tXFLG up to 13.5 ns -- and the engine writes those extra bytes
-; into the slack. Earlier the engine watched the real full flag and sampled it
-; before tXFLG had elapsed, dropping one byte per full event.
+; full. The engine looks at it once per word, and `jmp pin` sees it a couple of
+; IFCLKs late (input synchronizer 2 cycles, tXFLG up to 13.5 ns). Worst case
+; that is the rest of the word it asserted in, plus one more word: at most
+; 8 bytes into the 16 bytes of slack.
 ;
-; A stalled OUT (empty TX FIFO) freezes the SM with IFCLK low and SLWR# still
-; asserted. That is safe: with no rising edge the FX2 latches nothing, and it
-; does no register writes of its own after boot. IFCLK only has to be *running
-; before the FX2 firmware configures its FIFO registers*, i.e. before FX_RESET#
-; is released — which `clk_only` guarantees.
+; IFCLK also has to be *running before the FX2 firmware configures its FIFO
+; registers*, i.e. before FX_RESET# is released -- which `clk_only` guarantees.
 
 .program fx2_write
 .side_set 1
 
 ; Clock-only loop. No OUT, no data, cannot stall. This is what runs from
-; `fx2 up` until the first `arm`, and again after `disarm`.
+; `fx2 up` until the first `arm`, and again after `disarm`. Entry releases
+; SLWR#/PKTEND# first, whatever state the engine was left in.
 public clk_only:
-    nop                side 0 [1]      ; 2 cyc low
-    jmp clk_only       side 1 [1]      ; 2 cyc high  -> 4 cyc
+    set pins, 0b11     side 0 [1]      ; SLWR#=1, PKTEND#=1
+clk_loop:
+    nop                side 1 [1]      ; 2 cyc high
+    jmp clk_loop       side 0 [1]      ; 2 cyc low   -> 4 cyc
 
-; Leaving `stall`: assert SLWR# one cycle ahead of the first byte.
+; Commit whatever is in the EP6 buffer being filled as a short packet (a
+; zero-length one if it is empty: ZEROLENIN). Only entered from `stall` (or a
+; restart), so no word is half written.
+public pktend:
+    set pins, 0b01     side 0 [2]      ; 3 cyc low : PKTEND# asserted, SLWR# not
+    jmp stall          side 1 [1]      ; 2 cyc high: the FX2 commits on this edge;
+                                       ; `stall` releases PKTEND#
+
+; Leaving `stall`: assert SLWR# ahead of the first byte.
 enter:
-    set pins, 0b10     side 0          ; 1 cyc low : SLWR# asserted
-public write:
-    out pins, 8        side 0 [1]      ; 2 cyc low : next byte on FD
-    jmp pin, write     side 1 [1]      ; 2 cyc high: FX2 latches on the rising
-                                       ;             edge; room -> next byte
-; Nearly full: fall through. The byte just written is in.
+    set pins, 0b10     side 0          ; L : SLWR# asserted
+public word:
+    pull               side 0          ; L : never blocks, the FIFO was checked
+    out pins, 8        side 0          ; L : b0 on FD
+    mov x, status      side 1 [1]      ; H : FX2 latches b0. x = ~0 if the TX
+                                       ;     FIFO is empty: no next word
+    out pins, 8        side 0 [1]      ; L : b1
+    nop                side 1 [1]      ; H
+    out pins, 8        side 0 [1]      ; L : b2
+    nop                side 1 [1]      ; H
+    out pins, 8        side 0 [1]      ; L : b3
+    jmp !x, more       side 1          ; H : there is a next word...
+    jmp stall          side 1          ; H   (no: wait for one)
+more:
+    jmp pin, word      side 1          ; H : ...and room for it: carry on
+                                       ;     (no room: fall into `stall`)
 
+; Waiting for data and room, clock running, SLWR# and PKTEND# released.
+; Every byte written so far has been latched.
 .wrap_target
 public stall:
-    set pins, 0b11     side 0 [2]      ; 3 cyc low : SLWR#=1, PKTEND#=1
-    jmp pin, enter     side 1 [1]      ; 2 cyc high: room again?
-.wrap
+    set pins, 0b11     side 0          ; L : SLWR#=1, PKTEND#=1
+    mov x, status      side 0 [1]      ; L : x = ~0 if the TX FIFO is empty
+    jmp !x, have_data  side 1          ; H
+    jmp stall          side 1          ; H : nothing to send
+have_data:
+    jmp pin, enter     side 1          ; H : and room? then go
+.wrap                                  ;     no room: keep waiting
 
 % c-sdk {
 #include "hardware/clocks.h"
@@ -92,7 +129,10 @@ static inline void fx2_write_program_init(PIO pio, uint sm, uint offset,
     sm_config_set_set_pins(&c, pin_slwr, 2);
     sm_config_set_sideset_pins(&c, pin_ifclk);
     sm_config_set_jmp_pin(&c, pin_flagb);
-    sm_config_set_out_shift(&c, true /*shift_right*/, true /*autopull*/, 32);
+    // Explicit PULL once per word, never autopull: an autopull OUT on an empty
+    // FIFO stalls with IFCLK frozen, which the FX2 does not survive.
+    sm_config_set_out_shift(&c, true /*shift_right*/, false /*autopull*/, 32);
+    sm_config_set_mov_status(&c, STATUS_TX_LESSTHAN, 1);   // x = ~0 when TX FIFO empty
     sm_config_set_fifo_join(&c, PIO_FIFO_JOIN_TX);
     sm_config_set_clkdiv(&c, clkdiv);
 

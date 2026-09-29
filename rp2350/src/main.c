@@ -21,7 +21,7 @@
 #include "fx2_boot.h"
 #include "fx2_link.h"
 
-#define FW_VERSION "0.2.0"
+#define FW_VERSION "0.3.0"
 
 static char s_serial[PICO_UNIQUE_BOARD_ID_SIZE_BYTES * 2 + 1];
 
@@ -88,10 +88,11 @@ static void cmd_help(void) {
     puts("  ver                   firmware version");
     puts("  id                    board serial (shared with the FX2 later)");
     puts("  stat                  capture, FX2 link and board state");
-    puts("  arm <rate_hz> [pins|counter]");
-    puts("                        start a capture session into the vendor bulk IN:");
-    puts("                        the 16 CF signals (default) or a synthetic counter.");
-    puts("                        2300..2000000 Hz; ~380 ksps is what USB FS carries");
+    puts("  arm <rate_hz> [pins|counter] [usb|fx2]");
+    puts("                        start a capture session: the 16 CF signals (default)");
+    puts("                        or a synthetic counter, into this chip's vendor bulk");
+    puts("                        IN (default; ~380 ksps) or the FX2's EP6 (~17 Msps).");
+    puts("                        2300 Hz..2 MHz (usb), ..18.75 MHz (fx2)");
     puts("  disarm                stop sampling; the stream ends with an END block");
     puts("  clk <hz>              set IFCLK (5000000..37500000 = clkdiv 1)");
     puts("  fx2 up|down           release/assert FX_RESET# with IFCLK running");
@@ -110,12 +111,15 @@ static void cmd_help(void) {
 static void cmd_stat(void) {
     capture_status_t cs;
     capture_status(&cs);
-    printf("stat armed=%d busy=%d session=%lu rate=%lu samples=%llu blocks=%lu overruns=%lu lost=%llu\n",
-           cs.armed, cs.busy, (unsigned long)cs.session, (unsigned long)cs.rate_hz,
+    printf("stat armed=%d busy=%d aborted=%d sink=%s session=%lu rate=%lu samples=%llu "
+           "blocks=%lu overruns=%lu lost=%llu\n",
+           cs.armed, cs.busy, cs.aborted, cs.sink == SINK_FX2 ? "fx2" : "usb",
+           (unsigned long)cs.session, (unsigned long)cs.rate_hz,
            (unsigned long long)cs.samples, (unsigned long)cs.blocks,
            (unsigned long)cs.overruns, (unsigned long long)cs.lost);
-    printf("stat fx2=%s boot=%s eeprom_read=%lu ifclk=%lu counter=%s words=%llu cf_vcc=%d\n",
-           fx2_link_is_up() ? "up" : "down",
+    printf("stat fx2=%s sink_blocks=%lu boot=%s eeprom_read=%lu ifclk=%lu counter=%s "
+           "words=%llu cf_vcc=%d\n",
+           fx2_link_is_up() ? "up" : "down", (unsigned long)fx2_sink_blocks(),
            fx2_boot_mode_name(fx2_boot_get_mode()),
            (unsigned long)fx2_boot_bytes_served(),
            (unsigned long)fx2_link_get_ifclk(),
@@ -134,6 +138,7 @@ static void handle(char *line) {
     char *cmd = strtok(line, " ");
     char *a1  = strtok(NULL, " ");
     char *a2  = strtok(NULL, " ");
+    char *a3  = strtok(NULL, " ");
     if (!cmd) return;
 
     if (!strcmp(cmd, "ping")) {
@@ -182,6 +187,8 @@ static void handle(char *line) {
         } else if (!strcmp(a1, "test") && a2 && !strcmp(a2, "start")) {
             if (!fx2_link_is_up()) {
                 puts("err fx2 is down; run `fx2 up` first");
+            } else if (fx2_sink_running()) {
+                puts("err a capture session is using the FX2");
             } else {
                 fx2_counter_start();
                 puts("fx2 ok test running source=counter");
@@ -195,16 +202,35 @@ static void handle(char *line) {
             puts("err usage: fx2 up|down|reboot|boot|test");
         }
     } else if (!strcmp(cmd, "arm")) {
+        // Source and sink words may come in either order after the rate.
+        capture_source_t src = CAPTURE_PINS;
+        capture_sink_t sink = SINK_USB;
+        bool bad = !a1;
+        char *opts[] = {a2, a3};
+        for (uint i = 0; i < 2; i++) {
+            if (!opts[i]) continue;
+            if (!strcmp(opts[i], "pins")) src = CAPTURE_PINS;
+            else if (!strcmp(opts[i], "counter")) src = CAPTURE_COUNTER;
+            else if (!strcmp(opts[i], "usb")) sink = SINK_USB;
+            else if (!strcmp(opts[i], "fx2")) sink = SINK_FX2;
+            else bad = true;
+        }
         uint32_t session;
         uint32_t rate = a1 ? (uint32_t)strtoul(a1, NULL, 0) : 0;
-        capture_source_t src = (a2 && !strcmp(a2, "counter")) ? CAPTURE_COUNTER : CAPTURE_PINS;
-        if (!a1 || (a2 && strcmp(a2, "counter") && strcmp(a2, "pins"))) {
-            puts("err usage: arm <rate_hz> [pins|counter]");
-        } else if (!capture_arm(rate, src, &session)) {
-            puts("err already armed, or rate out of range (2300..2000000)");
+        capture_arm_result_t r = bad ? ARM_RATE : capture_arm(rate, src, sink, &session);
+        if (bad) {
+            puts("err usage: arm <rate_hz> [pins|counter] [usb|fx2]");
+        } else if (r == ARM_BUSY) {
+            puts("err already armed, or still draining the last session");
+        } else if (r == ARM_RATE) {
+            printf("err rate out of range for this sink (2300..%lu)\n",
+                   (unsigned long)capture_rate_max(sink));
+        } else if (r == ARM_NO_FX2) {
+            puts("err fx2 is down, or `fx2 test` is running");
         } else {
-            printf("arm ok session=%lu rate=%lu source=%s sink=usb\n", (unsigned long)session,
-                   (unsigned long)rate, src == CAPTURE_PINS ? "pins" : "counter");
+            printf("arm ok session=%lu rate=%lu source=%s sink=%s\n", (unsigned long)session,
+                   (unsigned long)rate, src == CAPTURE_PINS ? "pins" : "counter",
+                   sink == SINK_FX2 ? "fx2" : "usb");
         }
     } else if (!strcmp(cmd, "disarm")) {
         capture_status_t cs;

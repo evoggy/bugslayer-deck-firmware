@@ -1,8 +1,11 @@
-// FX2 slave FIFO link: IFCLK generation, reset sequencing, and a synthetic
-// counter source for the stage 1 pipe test (docs/bringup-plan.md).
+// FX2 slave FIFO link: IFCLK generation, reset sequencing, the capture block
+// sink, and a synthetic counter source for the stage 1 pipe test
+// (docs/bringup-plan.md).
 #pragma once
 #include <stdbool.h>
 #include <stdint.h>
+
+#include "block.h"
 
 // Loads the PIO program and parks the FX2 in reset. Call once at boot.
 void fx2_link_init(void);
@@ -20,6 +23,39 @@ bool fx2_link_is_up(void);
 // cycles per IFCLK period, so clkdiv 1 at 150 MHz is 37.5 MHz.
 uint32_t fx2_link_set_ifclk(uint32_t hz);
 uint32_t fx2_link_get_ifclk(void);
+
+// Block sink: capture blocks through EP6, whole 512-byte blocks only, so with
+// AUTOIN every block is exactly one USB packet. Blocks are built in place in a
+// ring of slots and a DMA channel feeds them to the write engine. The sink and
+// the counter test share the engine; each refuses to start while the other runs.
+
+// Flush any partial packet out of EP6 (PKTEND) and start the engine. False if
+// the link is down or the counter test is running.
+bool fx2_sink_start(void);
+
+// Stop at once, dropping whatever is still queued. A partial block may be left
+// in EP6; the next start flushes it as a short packet the host discards.
+void fx2_sink_stop(void);
+
+// A free slot to build the next block in, or NULL if all are queued. Calling
+// it again before fx2_sink_put() returns the same slot.
+block_t *fx2_sink_get(void);
+
+// Queue the slot from fx2_sink_get().
+void fx2_sink_put(void);
+
+// Every queued block has left the RP2350: DMA done, PIO FIFO and OSR empty.
+// (The last packets can still be in EP6, waiting for the host.)
+bool fx2_sink_drained(void);
+
+// If drained, pulse PKTEND: EP6 is on a packet boundary, so this commits a
+// zero-length packet, which completes the host's pending bulk transfer instead
+// of leaving the last blocks waiting in it for more data. Returns false (and
+// does nothing) if not drained.
+bool fx2_sink_flush(void);
+
+bool fx2_sink_running(void);
+uint32_t fx2_sink_blocks(void);        // blocks put since start
 
 // Stream a 32-bit little-endian incrementing counter into the FX2 until
 // stopped. Loss is then quantifiable on the host, not merely detectable.

@@ -28,6 +28,7 @@ Each stage has an explicit pass criterion. Do not move on without it.
 | 1.2 18.75 MHz | 2026-09-29 | ✅ **60 s, 1.13 GB, 18.76 MB/s, zero gaps**. Stall test (10 fill/stall rounds) clean |
 | 1.3 → 25 MB/s | 2026-09-29 | ✅ **4-cycle engine + FX2 programmable flag.** 25.05 MB/s at 25 MHz. At clkdiv 1 (IFCLK 37.5 MHz): **60 s, 2.25 GB, 37.52 MB/s, zero gaps**, stall test clean. The engine never waits on USB, so the RP2350's clock is now the limit |
 | 2 · block stream over RP2350 USB | 2026-09-29 | ✅ `bsly.py capture`: SESSION first, session matches `arm`, zero seq gaps, every synthetic sample = its index, END totals match, `.sr` written. Clean up to 350 ksps raw16 (the Full-Speed sink carries 768 kB/s); above that, loss arrives as inline OVERRUN blocks that the verifier accounts for exactly |
+| 5 · FX2 block sink | 2026-09-29 | ✅ `arm <rate> pins fx2`, `bsly.py capture --sink fx2`. **16.67 Msps raw16, 10 s, 167 M samples, 35.0 MB/s, zero loss**; 18.75 Msps overruns and accounts for it exactly; 3 ksps delivers every block plus END via idle ZLPs. Stage 1 still 37.5 MB/s on the reworked engine. **Real ground truth:** an nRF51 reset (`probe-rs reset --probe 35f0:db11-1`) re-enumerates a Flow deck v2: Search ROM and Match ROM agree on `0D D0 7B 8E 00 00 00 2D` (DS28E05, Dallas CRC OK), and Read Memory returns `bcFlow2` rev `A`, VID `BC` PID `0F`, with both CRC-32 bytes in the deck header matching. That meets stage 3's pass criterion through the FX2 |
 | 5 · FX2 self-boot | 2026-09-29 | ✅ RP2350 emulates the EEPROM at 0xA2 and serves the 3388-byte C2 image with its serial patched in. 20/20 reboots enumerate as `35F0:DB13` with the RP2350's serial, 0.18–0.22 s after reset release. Self-booted FX2 streams 37.55 MB/s with zero gaps. C0 and rom modes work |
 
 Two RP2350 bugs found and fixed on the way to 1.2, both now in `rp2350/README.md`:
@@ -194,8 +195,17 @@ Crazyflie startup** — every deck, every bus, no time-boxing.
 - ✅ *(done 2026-09-29, ahead of the rest of stage 5)* Move FX2 boot from `fx2tool` RAM-loading
   to the **RP2350 emulating the EEPROM at 0xA2**, with the C2 image bundled in the RP2350's
   UF2. `fx2 boot c2|c0|rom` switches mode without reprogramming.
-- Add inline `OVERRUN` blocks when FLAGB stalls the write SM.
-- Assert `PKTEND` on disarm so the tail of the capture is not stranded in the FIFO.
+- ✅ *(2026-09-29)* The FX2 block sink: a 64-slot ring of 512-byte blocks, fed to the write
+  engine by DMA. Loss when the host stops reading shows up as inline `OVERRUN` blocks, because
+  the sampler ring overflows behind a full sink. That is the same path as the USB sink.
+- ✅ *(2026-09-29)* `PKTEND`: a flush at sink start, and a zero-length packet whenever the
+  sink goes quiet, so the host's transfers complete (see docs/protocol.md). Blocks are whole
+  packets, so a disarm never strands a tail.
+- **Found on the way:** the write engine must never freeze IFCLK. It used to stall on an
+  empty TX FIFO with the clock stopped. The FX2 commits packets on IFCLK, and the block sink
+  runs dry at every packet boundary, so it wedged after a few dozen packets with EP6 full. It
+  now checks for data and room once per word and waits with the clock running
+  (`rp2350/README.md`).
 - Verify the shared `iSerialNumber` pairing with **two decks plugged into one PC**. This is the
   only way to find out that it is wrong.
 - Windows check on a clean machine: WinUSB binds to the FX2 with no Zadig.

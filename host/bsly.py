@@ -1,11 +1,15 @@
 #!/usr/bin/env python3
-"""Bugslayer deck capture tool (stage 2).
+"""Bugslayer deck capture tool.
 
     bsly.py capture --rate 200000 --duration 5 -o boot.sr
+    bsly.py capture --sink fx2 --rate 15000000 --duration 5 -o boot.sr
 
 Arms a session over the control CDC, reads the block stream from the RP2350's
-vendor bulk IN interface, verifies it, and writes a sigrok session (.sr) that
-PulseView and sigrok-cli open directly.
+vendor bulk IN interface (--sink usb, Full Speed, ~380 ksps) or the FX2's EP6
+(--sink fx2, High Speed, ~17 Msps), verifies it, and writes a sigrok session
+(.sr) that PulseView and sigrok-cli open directly. The FX2 is paired with the
+control port by serial number: the RP2350 patches its own into the FX2's boot
+image.
 
 Verification, per docs/protocol.md: the session ID matches the `arm` reply,
 SESSION is the first block, sequence numbers have no gaps, sample indices are
@@ -27,8 +31,9 @@ import serial
 import usb1
 from serial.tools import list_ports
 
-VID, PID_CTRL = 0x35F0, 0xDB12
-STREAM_ITF, STREAM_EP = 2, 0x83
+VID, PID_CTRL, PID_FX2 = 0x35F0, 0xDB12, 0xDB13
+STREAM_ITF, STREAM_EP = 2, 0x83            # RP2350 vendor interface
+FX2_ITF, FX2_EP = 0, 0x86                  # FX2 EP6
 
 BLOCK_SIZE = 512
 MAGIC = 0x594C5342
@@ -37,6 +42,13 @@ SESSION, SAMPLES, OVERRUN, IDLE, EVENT, END = range(6)
 TYPE_NAMES = {SESSION: "SESSION", SAMPLES: "SAMPLES", OVERRUN: "OVERRUN",
               IDLE: "IDLE", EVENT: "EVENT", END: "END"}
 ENC_RAW16 = 1
+
+# The same header as a numpy record, for checking a whole transfer at once.
+BLOCK_DT = np.dtype([("magic", "<u4"), ("version", "u1"), ("type", "u1"), ("stream", "u1"),
+                     ("flags", "u1"), ("session", "<u4"), ("seq", "<u4"), ("sample", "<u8"),
+                     ("plen", "<u2"), ("reserved", "<u2"), ("payload", "V484")])
+assert BLOCK_DT.itemsize == 512
+SAMPLES_PER_BLOCK = 242
 
 # GP16..31 in bit order, as wired on rev A (docs/hardware.md).
 CHANNEL_NAMES = ["IO_1", "IO_2", "IO_3", "IO_4", "MISO", "OW", "SCK", "MOSI",
@@ -87,8 +99,34 @@ class Verifier:
         if len(self.errors) < 20:
             self.errors.append(msg)
 
+    def feed_raw(self, buf):
+        """A run of whole blocks. The steady state -- every block a full SAMPLES
+        block of this session, continuing exactly where the last one ended -- is
+        checked and stored with numpy in one go; anything else (SESSION, OVERRUN,
+        END, stale or broken blocks) goes through feed() one block at a time."""
+        a = np.frombuffer(buf, dtype=BLOCK_DT)
+        n = len(a)
+        if n and self.blocks and self.end is None:
+            seq0, s0 = self.next_seq, self.next_sample
+            idx = np.arange(n, dtype=np.uint64)
+            if (np.all(a["magic"] == MAGIC) and np.all(a["session"] == self.session)
+                    and np.all(a["type"] == SAMPLES) and np.all(a["plen"] == 2 * SAMPLES_PER_BLOCK)
+                    and np.array_equal(a["seq"], (idx + seq0).astype(np.uint32))
+                    and np.array_equal(a["sample"], idx * SAMPLES_PER_BLOCK + s0)):
+                s = np.frombuffer(buf, dtype="<u2").reshape(n, 256)[:, 14:].ravel()
+                self.chunks.append((s0, s))
+                self.blocks += n
+                self.next_seq = seq0 + n
+                self.next_sample = s0 + n * SAMPLES_PER_BLOCK
+                return
+        for i in range(0, len(buf), BLOCK_SIZE):
+            self.feed(Block(buf[i:i + BLOCK_SIZE]))
+
     def feed(self, b):
         if b.magic != MAGIC:
+            if self.blocks == 0:
+                self.stale += 1      # residue from before this session: the stage 1
+                return               # test, or an aborted session's tail
             self.err(f"bad magic 0x{b.magic:08x}")
             return
         if b.session != self.session:
@@ -179,6 +217,24 @@ def write_sr(path, samples, rate_hz, names):
             z.writestr(f"logic-1-{i // chunk + 1}", raw[i:i + chunk])
 
 
+def find_fx2(ctx, serial_number, timeout=5.0):
+    """The FX2 with the control port's serial. It enumerates a moment after the
+    RP2350 (it only exists once the RP2350 has booted it), so wait for it."""
+    deadline = time.monotonic() + timeout
+    while True:
+        for dev in ctx.getDeviceIterator(skip_on_error=True):
+            if (dev.getVendorID(), dev.getProductID()) == (VID, PID_FX2):
+                try:
+                    if dev.getSerialNumber() == serial_number:
+                        return dev.open()
+                except usb1.USBError:
+                    pass
+        if time.monotonic() > deadline:
+            sys.exit(f"no FX2 (35f0:db13) with serial {serial_number}; "
+                     "is it up? (`fx2 up`, `stat`)")
+        time.sleep(0.2)
+
+
 def find_devices(ctx, serial_number=None):
     ports = [p for p in list_ports.comports()
              if p.vid == VID and p.pid == PID_CTRL
@@ -205,24 +261,47 @@ def command(ser, line, timeout=2.0):
 
 
 def capture(args):
+    fx2 = args.sink == "fx2"
     with usb1.USBContext() as ctx:
-        port, handle, serial_number = find_devices(ctx, args.serial)
-        handle.claimInterface(STREAM_ITF)
-        received = []                       # whole blocks, in arrival order
-        carry = bytearray()                 # a block split across transfers
+        port, ctrl_handle, serial_number = find_devices(ctx, args.serial)
+        if fx2:
+            # No timeout: cancelling a part-filled High Speed transfer can lose
+            # the packets already in it. The deck ends transfers instead, with a
+            # zero-length packet whenever it goes quiet (and after END).
+            handle, itf, ep = find_fx2(ctx, serial_number), FX2_ITF, FX2_EP
+            n_xfers, xfer_size, xfer_timeout = 64, 32 * BLOCK_SIZE, 0   # 1 MB, ~28 ms
+        else:
+            handle, itf, ep = ctrl_handle, STREAM_ITF, STREAM_EP
+            n_xfers, xfer_size, xfer_timeout = 8, 16 * BLOCK_SIZE, 100
+        handle.claimInterface(itf)
+        received = []                       # runs of whole blocks, in arrival order
+        carry = bytearray()                 # USB sink: a block split across transfers
+        short = [0]                         # FX2: bytes of short packets discarded
         pending = [0]
         stop = [False]
+        transfers = []
 
         def on_transfer(t):
             status = t.getStatus()
             # A transfer that times out can still carry data -- often exactly the
             # one block sent after a quiet spell, like SESSION. Keep it.
             if status in (usb1.TRANSFER_COMPLETED, usb1.TRANSFER_TIMED_OUT):
-                carry.extend(t.getBuffer()[:t.getActualLength()])
-                n = len(carry) // BLOCK_SIZE * BLOCK_SIZE
-                for i in range(0, n, BLOCK_SIZE):
-                    received.append(Block(bytes(carry[i:i + BLOCK_SIZE])))
-                del carry[:n]
+                data = t.getBuffer()[:t.getActualLength()]
+                if fx2:
+                    # One block is one packet, and a short packet ends a transfer,
+                    # so a transfer is whole blocks plus at most one short packet:
+                    # the RP2350's PKTEND flush of an earlier session's partial
+                    # block. It is never part of this session; drop it.
+                    n = len(data) // BLOCK_SIZE * BLOCK_SIZE
+                    short[0] += len(data) - n
+                    if n:
+                        received.append(bytes(data[:n]))
+                else:
+                    carry.extend(data)
+                    n = len(carry) // BLOCK_SIZE * BLOCK_SIZE
+                    if n:
+                        received.append(bytes(carry[:n]))
+                    del carry[:n]
             elif status != usb1.TRANSFER_CANCELLED:
                 print(f"transfer status {status}", file=sys.stderr)
             if stop[0]:
@@ -230,20 +309,21 @@ def capture(args):
             else:
                 t.submit()
 
-        for _ in range(8):
+        for _ in range(n_xfers):
             t = handle.getTransfer()
-            t.setBulk(STREAM_EP, 16 * BLOCK_SIZE, callback=on_transfer, timeout=100)
+            t.setBulk(ep, xfer_size, callback=on_transfer, timeout=xfer_timeout)
             t.submit()
             pending[0] += 1
+            transfers.append(t)
 
         def pump(seconds):
             end = time.monotonic() + seconds
             while time.monotonic() < end:
-                ctx.handleEvents()
+                ctx.handleEventsTimeout(0.02)
 
         with serial.Serial(port, timeout=0.05) as ser:
             pump(0.2)                        # drain any earlier session's tail
-            reply = command(ser, f"arm {args.rate} {args.source}")
+            reply = command(ser, f"arm {args.rate} {args.source} {args.sink}")
             print(reply)
             if not reply.startswith("arm ok"):
                 sys.exit(1)
@@ -255,7 +335,8 @@ def capture(args):
             while time.monotonic() - start < args.duration:
                 pump(0.1)
                 while done_idx < len(received):
-                    v.feed(received[done_idx])
+                    v.feed_raw(received[done_idx])
+                    received[done_idx] = None
                     done_idx += 1
             print(command(ser, "disarm"))
 
@@ -264,14 +345,20 @@ def capture(args):
             while v.end is None and time.monotonic() < deadline:
                 pump(0.05)
                 while done_idx < len(received):
-                    v.feed(received[done_idx])
+                    v.feed_raw(received[done_idx])
+                    received[done_idx] = None
                     done_idx += 1
             elapsed = time.monotonic() - start
 
         stop[0] = True
+        for t in transfers:                 # FX2 transfers never time out
+            try:
+                t.cancel()
+            except usb1.USBError:
+                pass                        # already completed
         while pending[0]:
-            ctx.handleEvents()
-        handle.releaseInterface(STREAM_ITF)
+            ctx.handleEventsTimeout(0.02)
+        handle.releaseInterface(itf)
 
     if v.end is None:
         v.err("no END block within 5 s of disarm")
@@ -284,7 +371,10 @@ def capture(args):
     print()
     print(f"device     {serial_number}  fw {v.info['fw'] if v.info else '?'}  "
           f"source {stream['source'] if stream else '?'}")
-    print(f"session    {session}  ({v.blocks} blocks, {v.stale} stale from earlier sessions)")
+    print(f"session    {session}  via {args.sink}  ({v.blocks} blocks, "
+          f"{v.stale} stale from earlier sessions)")
+    if short[0]:
+        print(f"flushed    {short[0]} bytes of an earlier session's partial block")
     print(f"samples    {v.next_sample} at {rate:g} Hz = {v.next_sample / rate if rate else 0:.3f} s")
     print(f"throughput {v.blocks * BLOCK_SIZE / elapsed / 1e3:.0f} kB/s")
     print(f"overruns   {len(v.overruns)} ({lost} samples lost)")
@@ -320,6 +410,8 @@ def main():
                         "the exact rate is in the SESSION block")
     c.add_argument("--source", choices=("pins", "counter"), default="pins",
                    help="the 16 CF signals, or the synthetic counter (stage 2 test)")
+    c.add_argument("--sink", choices=("usb", "fx2"), default="usb",
+                   help="RP2350's own USB (Full Speed, <=~380 ksps) or the FX2 (High Speed)")
     c.add_argument("--duration", type=float, default=2.0, help="seconds")
     c.add_argument("-o", "--output", help="sigrok .sr file to write")
     c.add_argument("--no-overrun", action="store_true", help="fail if any samples were lost")

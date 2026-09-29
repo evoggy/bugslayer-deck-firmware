@@ -1,3 +1,5 @@
+#include <string.h>
+
 #include "hardware/clocks.h"
 #include "hardware/dma.h"
 #include "hardware/irq.h"
@@ -104,6 +106,12 @@ uint64_t sampler_produced(void) {
     return s_running ? produced_now() : s_final;
 }
 
+// Two memcpys at most: at the FX2 sink's rates the CPU has a handful of
+// cycles per sample, and a per-sample modulo does not fit.
 void sampler_copy(uint16_t *dst, uint64_t index, uint32_t n) {
-    for (uint32_t i = 0; i < n; i++) dst[i] = s_ring[(index + i) % SAMPLER_RING_SAMPLES];
+    uint32_t at    = (uint32_t)(index % SAMPLER_RING_SAMPLES);
+    uint32_t first = SAMPLER_RING_SAMPLES - at;
+    if (first > n) first = n;
+    memcpy(dst, &s_ring[at], first * sizeof(uint16_t));
+    memcpy(dst + first, s_ring, (n - first) * sizeof(uint16_t));
 }
