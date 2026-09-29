@@ -5,24 +5,33 @@
 ;   OUT  base GP32, 8 pins : FD0..FD7
 ;   SET  base GP41, 2 pins : bit0 = SLWR#, bit1 = PKTEND#   (both active LOW)
 ;   side-set  GP40         : IFCLK
-;   JMP pin   GP43         : FLAGB — EP6 full flag, active low, so HIGH = room
+;   JMP pin   GP43         : FLAGB — the FX2's EP6 *programmable-level* flag,
+;                            inverted at the pad, so HIGH = room
 ;
-; Eight clk_sys cycles per IFCLK period: 4 low, 4 high. At clk_sys = 150 MHz and
-; clkdiv = 1 that is IFCLK 18.75 MHz -> 18.75 MB/s. tIFCLK must stay inside
-; 20.83..200 ns (CBM9002A datasheet p.17, identical to the Cypress FX2LP spec).
+; Streaming is four clk_sys cycles per byte, 2 low and 2 high, with SLWR# held
+; asserted: one byte per IFCLK. At clk_sys = 150 MHz and clkdiv = 1 that is
+; IFCLK 37.5 MHz -> 37.5 MB/s into the FX2, more than USB 2.0 bulk drains, so
+; the engine spends real time in `stall`. tIFCLK must stay inside 20.83..200 ns
+; (CBM9002A datasheet p.17, identical to the Cypress FX2LP spec).
 ;
-; Timing at 150 MHz, measured against the rising edge the FX2 samples on:
-;   FD driven      4 cyc = 26.7 ns before   (tSFD  >= 3.2 ns)   OK
-;   SLWR# asserted 3 cyc = 20.0 ns before   (tSWR  >= 12.1 ns)  OK
-;   FD/SLWR# held  4 cyc = 26.7 ns after    (tFDH  >= 4.5 ns)   OK
-;   FLAGB sampled  3 cyc = 20.0 ns after    (tXFLG <= 13.5 ns)  OK, but only with
-;                  the input synchronizer bypassed (2 more cycles otherwise)
+; Timing at 150 MHz (6.67 ns/cycle), against the rising edge the FX2 samples on:
+;   FD driven       2 cyc = 13.3 ns before  (tSFD >= 3.2 ns)   OK
+;   FD held         2 cyc = 13.3 ns after   (tFDH >= 4.5 ns)   OK
+;   SLWR# asserted  3 cyc = 20.0 ns before  (tSWR >= 12.1 ns)  OK  (enter)
+;   SLWR# released  3 cyc = 20.0 ns before  (tSWR >= 12.1 ns)  OK  (stall)
+;
+; Flow control does not depend on flag timing. FLAGB is the EP6 programmable
+; flag, set in the FX2 firmware to assert PF_SLACK (16) bytes before EP6 is
+; full. `jmp pin` sees it a couple of IFCLKs late -- the input synchronizer
+; adds 2 cycles, tXFLG up to 13.5 ns -- and the engine writes those extra bytes
+; into the slack. Earlier the engine watched the real full flag and sampled it
+; before tXFLG had elapsed, dropping one byte per full event.
 ;
 ; A stalled OUT (empty TX FIFO) freezes the SM with IFCLK low and SLWR# still
-; asserted from the previous word. That is safe: with no rising edge the FX2
-; latches nothing, and it does no register writes of its own after boot. IFCLK
-; only has to be *running before the FX2 firmware configures its FIFO
-; registers*, i.e. before FX_RESET# is released — which `clk_only` guarantees.
+; asserted. That is safe: with no rising edge the FX2 latches nothing, and it
+; does no register writes of its own after boot. IFCLK only has to be *running
+; before the FX2 firmware configures its FIFO registers*, i.e. before FX_RESET#
+; is released — which `clk_only` guarantees.
 
 .program fx2_write
 .side_set 1
@@ -30,24 +39,23 @@
 ; Clock-only loop. No OUT, no data, cannot stall. This is what runs from
 ; `fx2 up` until the first `arm`, and again after `disarm`.
 public clk_only:
-    nop                side 0 [3]      ; 4 cyc low
-    jmp clk_only       side 1 [3]      ; 4 cyc high   -> 8 cyc
+    nop                side 0 [1]      ; 2 cyc low
+    jmp clk_only       side 1 [1]      ; 2 cyc high  -> 4 cyc
 
-; EP6 is full: keep clocking, SLWR# deasserted, re-check every period.
+; Leaving `stall`: assert SLWR# one cycle ahead of the first byte.
+enter:
+    set pins, 0b10     side 0          ; 1 cyc low : SLWR# asserted
+public write:
+    out pins, 8        side 0 [1]      ; 2 cyc low : next byte on FD
+    jmp pin, write     side 1 [1]      ; 2 cyc high: FX2 latches on the rising
+                                       ;             edge; room -> next byte
+; Nearly full: fall through. The byte just written is in.
+
 .wrap_target
 public stall:
-    set pins, 0b11     side 0 [3]      ; 4 cyc low  : SLWR#=1, PKTEND#=1
-    nop                side 1 [2]      ; 3 cyc high
-    jmp pin, write     side 1          ; 1 cyc high : room in EP6?
-.wrap                                  ; still full -> stall (free wrap)
-
-; Streaming.
-write:
-    out pins, 8        side 0          ; 1 cyc low  : new FD on the falling edge
-    set pins, 0b10     side 0 [2]      ; 3 cyc low  : SLWR# asserted
-    nop                side 1 [2]      ; 3 cyc high : FX2 samples on the rising edge
-    jmp pin, write     side 1          ; 1 cyc high : still room -> next word
-    jmp stall          side 0          ; full: one extra low cycle (9-cyc period, legal)
+    set pins, 0b11     side 0 [2]      ; 3 cyc low : SLWR#=1, PKTEND#=1
+    jmp pin, enter     side 1 [1]      ; 2 cyc high: room again?
+.wrap
 
 % c-sdk {
 #include "hardware/clocks.h"
@@ -68,12 +76,12 @@ static inline void fx2_write_program_init(PIO pio, uint sm, uint offset,
     // it the PIO reads a latched 0 ("EP6 full") and never leaves `stall`.
     pio_gpio_init(pio, pin_flagb);
 
-    // Bypass the 2-cycle input synchronizer on FLAGB. With it, `jmp pin` sees the
-    // pin as it was ~1 cycle after the rising edge, before tXFLG (13.5 ns) has
-    // elapsed: the engine writes one byte into a full EP6, and the FX2 silently
-    // drops it. FLAGB is synchronous to the IFCLK we generate, so bypassing is
-    // safe. The register is indexed from the PIO's GPIO base.
-    hw_set_bits(&pio->input_sync_bypass, 1u << (pin_flagb - pio_get_gpio_base(pio)));
+    // The input synchronizer stays on: its 2-cycle latency is absorbed by the
+    // FX2's PF slack, so there is no reason to risk metastability.
+
+    // FLAGB is the FX2's EP6 programmable-level flag, which drives HIGH when EP6
+    // is nearly full. Invert it at the pad so `jmp pin` keeps meaning "room".
+    gpio_set_inover(pin_flagb, GPIO_OVERRIDE_INVERT);
 
     pio_sm_set_consecutive_pindirs(pio, sm, pin_fd0, 8, true);
     pio_sm_set_consecutive_pindirs(pio, sm, pin_ifclk, 3, true);   // IFCLK, SLWR#, PKTEND#

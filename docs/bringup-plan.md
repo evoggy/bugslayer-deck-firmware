@@ -26,13 +26,25 @@ Each stage has an explicit pass criterion. Do not move on without it.
 | 0c FX2, no firmware | 2026-09-29 | ✅ `fx2 up` → `04B4:8613` at **480 Mbit/s** on CH334 port 2 |
 | 1.1 6 MHz | 2026-09-29 | ✅ 6.00 MB/s, 61 MB, zero gaps. **The clone's sync external-IFCLK path works** |
 | 1.2 18.75 MHz | 2026-09-29 | ✅ **60 s, 1.13 GB, 18.76 MB/s, zero gaps**. Stall test (10 fill/stall rounds) clean |
-| 1.3 → 25 MB/s | — | not started |
+| 1.3 → 25 MB/s | 2026-09-29 | ✅ **4-cycle engine + FX2 programmable flag.** 25.05 MB/s at 25 MHz. At clkdiv 1 (IFCLK 37.5 MHz): **60 s, 2.25 GB, 37.52 MB/s, zero gaps**, stall test clean. The engine never waits on USB, so the RP2350's clock is now the limit |
 
 Two RP2350 bugs found and fixed on the way to 1.2, both now in `rp2350/README.md`:
 FLAGB's pad was still isolated (ISO) so the engine never left `stall`, and the PIO input
 synchronizer made FLAGB late enough to drop one byte per EP6-full event at clkdiv 1. The second
 is invisible in a plain streaming run where the host keeps up. `fx2_counter_test.py --stall`
 catches it.
+
+Stage 1.3 replaced the flag-timing problem instead of tuning it. FLAGB is now the FX2's EP6
+*programmable-level* flag, asserting 16 bytes before full (active high, inverted at the RP2350
+pad). A late sample now writes into slack instead of into a full FIFO, and the engine dropped
+from 8 to 4 `clk_sys` cycles per byte with SLWR# held asserted while streaming.
+
+An apparent ~32 MB/s ceiling turned out to be the **test tool**. The per-word Python checker
+resubmitted USB transfers late, and the FX2 flow-controlled the RP2350. That was diagnosed with
+`prof` (23% in `stall`, 0% starved) and `fx2_counter_test.py --no-check` (37.6 MB/s), and it
+didn't change between a dock and a direct root port. The checker now has a numpy fast path
+(~3 GB/s) and measures the link, not itself. Beyond 37.5 MB/s needs a faster `clk_sys`: the
+FX2 takes IFCLK up to 48 MHz, which is 192 MHz at 4 cycles/byte.
 
 ## Stage 0 — signs of life, no firmware to speak of
 
@@ -83,7 +95,8 @@ Switching between them is a `pio_sm_exec` of a `jmp`. A stalled `out` freezes th
 is safe *after* the FX2 has configured itself — see docs/hardware.md.
 
 ⚠️ 18.75 MB/s is a deliberately conservative first cut. A tighter loop is possible once the
-link is proven; do not optimise before stage 1.3 passes.
+link is proven; do not optimise before stage 1.3 passes. *(Superseded by stage 1.3: 4 cycles
+per byte, FLAGB = programmable flag. See Results and `rp2350/pio/fx2_write.pio`.)*
 
 **FX2 side.** ✅ Implemented: `fx2/src/main.c`. ~30 lines of register init plus a descriptor
 set with the MS OS 1.0 `WINUSB` compat ID, built with SDCC against libfx2 (submodule). Needs

@@ -21,13 +21,15 @@ all live there. This README is the build entry point, not the design.
 
 ## Configuration
 
-Sync slave FIFO, **IN-only**, `AUTOIN`, **external IFCLK** driven by the RP2350 at 25 MHz.
+Sync slave FIFO, **IN-only**, `AUTOIN`, **external IFCLK** driven by the RP2350 at up to 37.5 MHz.
 EP6 bulk IN, 512 bytes, quad-buffered. FIFOADR is strapped to EP6 in hardware; SLRD and SLOE
-are tied inactive. `FLAGB` = EP6 full flag, active low.
+are tied inactive. `FLAGB` = EP6 **programmable-level flag**, asserting `PF_SLACK` (16) bytes
+before full; the PF pin is active **high** (measured, the TRM does not say).
 
 Gotchas that will cost an afternoon each:
 `SYNCDELAY` between FIFO/endpoint register writes · `WORDWIDE` defaults **on** and must be
-cleared · `PINFLAGSAB = 0xE0` for FLAGB = EP6 FF · bump `bcdDevice` on every descriptor change
+cleared · `PINFLAGSAB = 0x60` for FLAGB = EP6 PF, with `EP6FIFOPFH/L = 0x99/0xF0`
+(3 committed packets + 496 bytes, TRM §15.6.5) · bump `bcdDevice` on every descriptor change
 during development, because Windows caches the MS-OS-descriptor answer per VID/PID/bcdDevice.
 
 ## Build
@@ -68,7 +70,7 @@ tools/    C2 image → C array for the RP2350 build
 
 **Works on the rev-A prototype (2026-09-29).** It builds warning-free with SDCC 4.2.0,
 RAM-loads with `fx2tool`, re-enumerates as `35F0:DB13` at High Speed, and carried 1.1 GB of
-the RP2350's counter at 18.75 MB/s with zero gaps. The CBM9002A clone behaves like the Cypress
+the RP2350's counter at 37.5 MB/s (the RP2350's clkdiv-1 rate) with zero gaps. The CBM9002A clone behaves like the Cypress
 part on the sync external-IFCLK path.
 
 Implemented: sync slave FIFO init, EP6 bulk IN 512 quad-buffered, AUTOIN, vendor-class

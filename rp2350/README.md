@@ -42,13 +42,15 @@ ISO bit), and only `gpio_set_function()` clears it. `gpio_set_input_enabled()` a
 enough: FLAGB read a latched 0 ("EP6 full") and the write engine never left `stall`. Every pin
 a PIO reads needs `pio_gpio_init()` (or `gpio_init()` for SIO), inputs included.
 
-**Fast synchronous inputs need the synchronizer bypassed.** PIO inputs pass a 2-cycle
-synchronizer. At clkdiv 1 that made `jmp pin` see FLAGB before tXFLG had elapsed, so the engine
-wrote one byte into a full EP6 on every full event and the FX2 dropped it. That was invisible
-while the host kept up, and it showed up as byte-misalignment as soon as it didn't.
-`fx2_write_program_init()` now sets `input_sync_bypass` for FLAGB. The bit is relative to the
-PIO's GPIO base (GP43 → bit 27), confirmed on hardware. `host/fx2_counter_test.py --stall`
-is the regression test.
+**Don't flow-control off a flag you can't sample in time.** PIO inputs pass a 2-cycle
+synchronizer. With the original 8-cycle engine watching the FX2's *full* flag, `jmp pin` saw
+FLAGB before tXFLG had elapsed. The engine wrote one byte into a full EP6 on every full event,
+and the FX2 dropped it. That was invisible while the host kept up, and it showed up as
+byte-misalignment as soon as it didn't. Bypassing the synchronizer (`input_sync_bypass`, bit
+relative to the PIO's GPIO base: GP43 → bit 27) fixed it at 8 cycles/byte. The final fix is
+structural: FLAGB is now the FX2's *programmable* flag with 16 bytes of slack, so latency no
+longer matters, the synchronizer is back on, and the engine runs at 4 cycles/byte.
+`host/fx2_counter_test.py --stall` is the regression test.
 
 ## Layout
 
@@ -75,8 +77,9 @@ firmware has to be loaded again. Verified against pico-sdk 2.2.0 and arm-none-ea
 
 ## Status
 
-**Stages 0a, 0c and 1.2 pass on the rev-A prototype (2026-09-29).** 60 s at 18.75 MB/s
-through the FX2 with zero sequence gaps, and a clean backpressure test. See
+**Stage 1 passes on the rev-A prototype (2026-09-29).** At clkdiv 1 (IFCLK 37.5 MHz) the
+link carries the full 37.5 MB/s with zero sequence gaps over 60 s (2.25 GB), and the
+backpressure test is clean. The engine never waits on USB: the RP2350's clock is the limit. See
 [../docs/bringup-plan.md](../docs/bringup-plan.md).
 
 Control plane: `35F0:DB12` CDC, send `help`, or use `host/bslyctl.py`. LEDs: green heartbeat,
@@ -85,11 +88,12 @@ yellow = FX2 up, blue = streaming. The whole stage 1 run is `host/stage1.sh`; by
 ```
 fx2 up            # IFCLK starts, then FX_RESET# releases -> 04b4:8613
                   # (host: fx2tool -d 04b4:8613 load fx2/bugslayer-fx2.ihex -> 35f0:db13)
-clk 18750000      # 5..25 MHz; 18.75 MHz is clkdiv 1 at 150 MHz
+clk 37500000      # 5..37.5 MHz; 37.5 MHz is clkdiv 1 at 150 MHz (4 cycles/byte)
 arm
                   # (host: host/fx2_counter_test.py --ours --duration 60)
 disarm            # waits for queued words so the FX2 only holds whole words
-dbg               # FLAGB, pad ISO, PIO PC, TX FIFO level, DMA counts
+dbg               # EP6 room (FLAGB), pad ISO, PIO PC, TX FIFO level, DMA counts
+prof              # while streaming: % writing / flow-controlled by FLAGB / starved
 ```
 
 Not yet: capture, the block framing from ../docs/protocol.md, EEPROM emulation, PKTEND on

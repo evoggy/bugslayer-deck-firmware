@@ -16,7 +16,8 @@ void fx2_link_down(void);
 bool fx2_link_is_up(void);
 
 // Requested IFCLK in Hz; returns what was actually achieved after clkdiv
-// rounding. The PIO program takes 8 clk_sys cycles per IFCLK period.
+// rounding, clamped to the FX2's 5..48 MHz. The PIO program takes 4 clk_sys
+// cycles per IFCLK period, so clkdiv 1 at 150 MHz is 37.5 MHz.
 uint32_t fx2_link_set_ifclk(uint32_t hz);
 uint32_t fx2_link_get_ifclk(void);
 
@@ -35,3 +36,6 @@ uint64_t fx2_counter_words(void);
 
 // One line of link internals for bring-up: FLAGB, PIO PC, FIFO level, DMA.
 void fx2_link_debug(void);
+
+// Sample the write engine's state: streaming vs flow-controlled vs starved.
+void fx2_link_profile(uint32_t samples);

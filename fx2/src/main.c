@@ -23,6 +23,10 @@
 // stale cache for an afternoon.
 #define USB_BCD_DEVICE 0x0001
 
+// Bytes of headroom between FLAGB asserting and EP6 actually being full.
+// Must exceed the write engine's flag-to-stop latency in IFCLK cycles.
+#define PF_SLACK 16
+
 enum {
     USB_DESC_STRING_MS_INDEX   = 0xEE,
     USB_REQ_GET_MS_DESCRIPTOR  = 0xC0,
@@ -190,8 +194,17 @@ static void fifo_init(void) {
     SYNCDELAY; EP6AUTOINLENH = 0x02;
     SYNCDELAY; EP6AUTOINLENL = 0x00;
 
-    SYNCDELAY; FIFOPINPOLAR = 0;      // SLWR#, PKTEND#, FLAGx all active low
-    SYNCDELAY; PINFLAGSAB   = 0xE0;   // FLAGB = EP6 FF (nibble 0b1110); FLAGA unused
+    SYNCDELAY; FIFOPINPOLAR = 0;      // SLWR#, PKTEND#, FF/EF active low
+
+    // FLAGB = EP6 programmable-level flag, not the full flag. It asserts
+    // PF_SLACK bytes before EP6 is really full, so the RP2350's write engine
+    // can see it a few IFCLKs late without overrunning the FIFO. With PKTSTAT=0
+    // the threshold is "3 committed packets + (512 - PF_SLACK) bytes in the one
+    // being filled"; with quad buffering that is PF_SLACK short of full.
+    // (TRM 15.6.5: EP6FIFOPFH = DECIS | IN:PKTS[2:0] << 3 | PFC9:8)
+    SYNCDELAY; EP6FIFOPFH   = (uint8_t)(_DECIS | (3 << 3) | ((512 - PF_SLACK) >> 8));
+    SYNCDELAY; EP6FIFOPFL   = (uint8_t)((512 - PF_SLACK) & 0xFF);
+    SYNCDELAY; PINFLAGSAB   = 0x60;   // FLAGB = EP6PF (nibble 0b0110); FLAGA unused
 
     SYNCDELAY; FIFORESET = _NAKALL;
     SYNCDELAY; FIFORESET = _NAKALL|6;

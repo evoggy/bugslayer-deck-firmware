@@ -80,13 +80,17 @@ a bus while a PIO SM logs it.
 | GP40 | IFCLK | RP2350 → FX2 | **RP2350 is clock master**, side-set |
 | GP41 | SLWR | RP2350 → FX2 | write strobe, active low |
 | GP42 | PKTEND | RP2350 → FX2 | commit a short packet, active low |
-| GP43 | FLAGB | FX2 → RP2350 | EP6 full flag, **active low** (`jmp pin`) |
+| GP43 | FLAGB | FX2 → RP2350 | EP6 **programmable-level** flag, high = nearly full; pad input inverted (`jmp pin` = room) |
 
 Strapped in hardware, not firmware: FIFOADR = EP6 (`FIFOADR1=1, FIFOADR0=0`), SLRD and SLOE
 tied inactive. The link is IN-only.
 
-⚠️ **FLAGB low means full.** `jmp pin` branches when the pin is *high*, i.e. when there is
-room. Easy to get backwards.
+⚠️ **FLAGB is the EP6 programmable flag, not the full flag.** The FX2 firmware sets it to
+assert 16 bytes before EP6 is full (`PF_SLACK`), and the PF pin drives **high** when asserted.
+`fx2_write_program_init()` inverts GP43 at the pad (`GPIO_OVERRIDE_INVERT`), so `jmp pin`
+branches when there is room. The slack is what lets the write engine run one byte per IFCLK
+and react a few clocks late: sampling the real full flag in time is not possible at clkdiv 1
+through the input synchronizer.
 
 ⚠️ **IFCLK must be running before the FX2's firmware configures its FIFO registers**, i.e.
 before `FX_RESET#` is released. With `IFCLKSRC=0` that register block is clocked from GP40, and

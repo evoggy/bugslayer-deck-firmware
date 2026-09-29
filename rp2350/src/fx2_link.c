@@ -12,10 +12,14 @@
 #include "fx2_link.h"
 #include "fx2_write.pio.h"
 
-#define PIO_CYCLES_PER_IFCLK 8
+#define PIO_CYCLES_PER_IFCLK 4
 
-// Two 8 KiB buffers ping-pong through the PIO TX FIFO. At 18.75 MB/s each
-// buffer lasts ~437 us, so the refill IRQ is comfortably infrequent.
+// FX2 IFCLK limits: tIFCLK 20.83..200 ns.
+#define IFCLK_MAX_HZ 48000000u
+#define IFCLK_MIN_HZ  5000000u
+
+// Two 8 KiB buffers ping-pong through the PIO TX FIFO. At 37.5 MB/s each
+// buffer lasts ~218 us; refilling one takes a small fraction of that.
 #define BUF_WORDS 2048
 
 static PIO      s_pio;
@@ -76,6 +80,8 @@ void fx2_link_init(void) {
 
 uint32_t fx2_link_set_ifclk(uint32_t hz) {
     if (hz == 0) return s_ifclk_hz;
+    if (hz > IFCLK_MAX_HZ) hz = IFCLK_MAX_HZ;
+    if (hz < IFCLK_MIN_HZ) hz = IFCLK_MIN_HZ;
     float div = (float)clock_get_hz(clk_sys) / (float)(hz * PIO_CYCLES_PER_IFCLK);
     if (div < 1.0f)     div = 1.0f;
     if (div > 65535.0f) div = 65535.0f;
@@ -173,7 +179,7 @@ uint64_t fx2_counter_words(void) { return s_words_total; }
 
 void fx2_link_debug(void) {
     uint pc = pio_sm_get_pc(s_pio, s_sm) - s_offset;
-    printf("dbg flagb=%d iso=%d pc=%u (clk_only=%u stall=%u) txlevel=%u "
+    printf("dbg room=%d iso=%d pc=%u (clk_only=%u stall=%u) txlevel=%u "
            "dma0=%lu dma1=%lu busy=%d/%d\n",
            gpio_get(PIN_FX_FLAGB),
            (int)!!(pads_bank0_hw->io[PIN_FX_FLAGB] & PADS_BANK0_GPIO0_ISO_BITS),
@@ -182,4 +188,26 @@ void fx2_link_debug(void) {
            (unsigned long)dma_channel_hw_addr(s_dma[0])->transfer_count,
            (unsigned long)dma_channel_hw_addr(s_dma[1])->transfer_count,
            dma_channel_is_busy(s_dma[0]), dma_channel_is_busy(s_dma[1]));
+}
+
+// Where does the write engine spend its time? Samples the SM's PC and the
+// sticky TX-stall flag. `stall` = FLAGB says EP6 has no room (the USB side is
+// the bottleneck); `starved` = OUT waited on an empty TX FIFO (the RP2350 side
+// is the bottleneck); `write` = streaming.
+void fx2_link_profile(uint32_t samples) {
+    uint32_t n_write = 0, n_stall = 0, n_other = 0, n_starved = 0;
+    const uint32_t stall_bit = 1u << (PIO_FDEBUG_TXSTALL_LSB + s_sm);
+    for (uint32_t i = 0; i < samples; i++) {
+        s_pio->fdebug = stall_bit;
+        busy_wait_at_least_cycles(40);   // ~2.5 IFCLKs at clkdiv 1
+        uint pc = pio_sm_get_pc(s_pio, s_sm) - s_offset;
+        if (s_pio->fdebug & stall_bit) n_starved++;
+        if (pc == fx2_write_offset_stall || pc == fx2_write_offset_stall + 1) n_stall++;
+        else if (pc >= fx2_write_offset_write - 1 && pc <= fx2_write_offset_write + 1) n_write++;
+        else n_other++;
+    }
+    printf("prof samples=%lu write=%lu%% stall=%lu%% other=%lu%% starved=%lu%%\n",
+           (unsigned long)samples,
+           (unsigned long)(100ull * n_write / samples), (unsigned long)(100ull * n_stall / samples),
+           (unsigned long)(100ull * n_other / samples), (unsigned long)(100ull * n_starved / samples));
 }

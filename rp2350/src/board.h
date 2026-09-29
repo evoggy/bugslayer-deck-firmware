@@ -61,7 +61,8 @@
 #define PIN_FX_IFCLK        40   // side-set; RP2350 is the clock master
 #define PIN_FX_SLWR_N       41
 #define PIN_FX_PKTEND_N     42
-#define PIN_FX_FLAGB        43   // EP6 full flag, active low (jmp pin)
+#define PIN_FX_FLAGB        43   // EP6 programmable-level flag (PF), high = nearly full;
+                                 // inverted at the pad so jmp pin = room
 
 // --- GP44-47: unconnected on rev A ---
 // The ADC power telemetry (VCOM/VUSB/VCC dividers) was dropped; CF presence is

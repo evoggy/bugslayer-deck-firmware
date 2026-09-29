@@ -94,7 +94,7 @@ captures on its own.
 ## Status
 
 Rev-A prototypes are in bring-up. **Stages 0 and 1 pass** (2026-09-29): all three chips
-enumerate behind the hub, and the RP2350 → FX2 → PC pipe carries 18.75 MB/s with zero loss.
+enumerate behind the hub, and the RP2350 → FX2 → PC pipe carries 37.5 MB/s with zero loss.
 
 | Firmware | Status |
 |---|---|

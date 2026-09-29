@@ -67,13 +67,14 @@ static void cmd_help(void) {
     puts("  ver                   firmware version");
     puts("  id                    board serial (shared with the FX2 later)");
     puts("  stat                  link and counter state");
-    puts("  clk <hz>              set IFCLK (5000000..25000000)");
+    puts("  clk <hz>              set IFCLK (5000000..37500000 = clkdiv 1)");
     puts("  fx2 up|down           release/assert FX_RESET# with IFCLK running");
     puts("  arm                   start the stage 1 counter stream");
     puts("  disarm                stop it");
     puts("  pwr vcc|vcom on|off   high-side switches");
     puts("  pull on|off           I2C pull-ups (standalone only!)");
-    puts("  dbg                   FX2 link internals (FLAGB, PIO PC, DMA)");
+    puts("  dbg                   FX2 link internals (EP6 room, PIO PC, DMA)");
+    puts("  prof                  write engine: streaming / flow-controlled / starved");
 }
 
 static void cmd_stat(void) {
@@ -101,6 +102,8 @@ static void handle(char *line) {
         cmd_stat();
     } else if (!strcmp(cmd, "dbg")) {
         fx2_link_debug();
+    } else if (!strcmp(cmd, "prof")) {
+        fx2_link_profile(100000);
     } else if (!strcmp(cmd, "help")) {
         cmd_help();
     } else if (!strcmp(cmd, "clk") && a1) {

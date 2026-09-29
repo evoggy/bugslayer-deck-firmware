@@ -18,6 +18,8 @@ import struct
 import sys
 import time
 
+import numpy as np
+
 try:
     import usb1
 except ImportError:
@@ -58,6 +60,21 @@ class Checker:
         self.resyncs = 0
         self.restarts = 0
 
+    def _fast_path(self):
+        """Clean-stream case, vectorised: every whole word in the buffer is the
+        next counter value. Anything else falls back to the per-word walk,
+        which classifies gaps, resyncs and restarts exactly."""
+        n = len(self.buf) // 4
+        if n == 0:
+            return True
+        w = np.frombuffer(self.buf, dtype="<u4", count=n)
+        expect = (np.arange(n, dtype=np.uint64) + self.expected).astype(np.uint32)
+        if not np.array_equal(w, expect):
+            return False
+        self.expected = (int(w[-1]) + 1) & 0xFFFFFFFF
+        self.buf = self.buf[n * 4:]
+        return True
+
     def _find_alignment(self):
         need = 4 * self.RUN
         for off in range(4):
@@ -71,6 +88,8 @@ class Checker:
     def feed(self, data):
         self.bytes += len(data)
         self.buf += data
+        if self.expected is not None and self._fast_path():
+            return
         pos = 0
         while True:
             if self.expected is None:
@@ -125,8 +144,9 @@ def report(checker, resync_fails=False):
 
 
 def stall_test(handle, checker, rounds):
-    """Every pause fills EP6, so every round crosses the FLAGB full edge. That
-    edge is where a late FLAGB sample loses a byte (shows up as a resync)."""
+    """Every pause fills EP6, so every round crosses the FLAGB edge. That edge
+    is where flow control that reacts too late loses a byte (shows up as a
+    resync)."""
     for r in range(rounds):
         for _ in range(48):
             checker.feed(handle.bulkRead(EP_IN, XFER_SIZE, timeout=1000))
@@ -143,6 +163,10 @@ def main():
     p.add_argument("--pid", type=lambda s: int(s, 0), default=DEFAULT_PID)
     p.add_argument("--duration", type=float, default=10.0, help="seconds")
     p.add_argument("--serial", help="only match this iSerialNumber")
+    p.add_argument("--xfer-size", type=int, default=XFER_SIZE, help="bytes per queued transfer")
+    p.add_argument("--xfers", type=int, default=XFER_COUNT, help="transfers kept in flight")
+    p.add_argument("--no-check", action="store_true",
+                   help="count bytes only; measures the link, not the Python checker")
     p.add_argument("--stall", type=int, metavar="N", default=0,
                    help="backpressure test instead: N rounds of reading 3 MB then "
                         "pausing, so EP6 fills and FLAGB stalls the RP2350")
@@ -158,7 +182,10 @@ def main():
     def on_transfer(transfer):
         status = transfer.getStatus()
         if status == usb1.TRANSFER_COMPLETED:
-            checker.feed(transfer.getBuffer()[:transfer.getActualLength()])
+            if args.no_check:
+                checker.bytes += transfer.getActualLength()
+            else:
+                checker.feed(transfer.getBuffer()[:transfer.getActualLength()])
         elif status != usb1.TRANSFER_TIMED_OUT:
             print(f"transfer status {status}", file=sys.stderr)
             inflight[0] -= 1
@@ -194,9 +221,9 @@ def main():
                 handle.releaseInterface(0)
         try:
             transfers = []
-            for _ in range(XFER_COUNT):
+            for _ in range(args.xfers):
                 t = handle.getTransfer()
-                t.setBulk(EP_IN, XFER_SIZE, callback=on_transfer, timeout=1000)
+                t.setBulk(EP_IN, args.xfer_size, callback=on_transfer, timeout=1000)
                 t.submit()
                 inflight[0] += 1
                 transfers.append(t)
