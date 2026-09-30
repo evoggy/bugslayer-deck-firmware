@@ -181,7 +181,17 @@ stream format is unaffected.
 > fx2 reset|status           < fx2 ok
 > pwr vcc on|off             < pwr ok
 > pull on|off                < pull ok           (I2C pull-ups, standalone only)
+> i2c on [hz]|off            < i2c ok on rate=400000     (I2C1 master on SDA/SCL; off = Hi-Z)
+> i2c xfer <addr> <hex|-> <n>
+                             < i2c ok data=<hex>  | err i2c nak | err i2c timeout
+> i2c recover                < i2c ok recover sda=1
 ```
+
+`i2c xfer` writes the hex bytes (`-` for none), then reads `n` with a repeated
+START; up to 512 bytes each way. The master is off at boot and after `i2c off`,
+so the pins stay invisible to a Crazyflie; protocols on top (DeckCtrl) live on
+the host. `stat` has a third line with the power and bus state:
+`stat vcc_en=1 vcom_en=1 pull=1 i2c=off i2c_rate=0`.
 
 `arm` takes a source (`pins`, the 16 CF signals, default, or the synthetic `counter`) and a
 sink (`usb`, default, or `fx2`), in either order. Both sinks carry the same blocks. If a

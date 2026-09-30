@@ -11,7 +11,7 @@
 #include "sampler.h"
 #include "usb_stream.h"
 
-#define FW_VERSION "0.4.0"
+#define FW_VERSION "0.5.0"  // keep in step with main.c
 
 // Stream 0 is always the fixed-rate raw16 stream; stream 1, with `spi`, is the
 // SCK-clocked byte stream.

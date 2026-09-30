@@ -16,6 +16,7 @@ add_executable(bugslayer_deck
     src/fx2_link.c
     src/fx2_boot.c
     src/capture.c
+    src/i2c_master.c
     src/sampler.c
     src/usb_stream.c
     src/usb_descriptors.c

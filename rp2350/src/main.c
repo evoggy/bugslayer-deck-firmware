@@ -20,8 +20,9 @@
 #include "capture.h"
 #include "fx2_boot.h"
 #include "fx2_link.h"
+#include "i2c_master.h"
 
-#define FW_VERSION "0.4.0"
+#define FW_VERSION "0.5.0"
 
 static char s_serial[PICO_UNIQUE_BOARD_ID_SIZE_BYTES * 2 + 1];
 
@@ -105,6 +106,11 @@ static void cmd_help(void) {
     puts("  pwr vcc|vcom on|off   high-side switches");
     puts("  pull on|off           I2C pull-ups (standalone only!); off = Hi-Z, never low");
     puts("  pins                  live level of every CF signal");
+    puts("  i2c on [hz]|off       I2C1 master on SDA/SCL (default 400000); off = Hi-Z");
+    puts("  i2c xfer <addr> <hex|-> <n>");
+    puts("                        write the bytes (- for none), repeated START, read n;");
+    puts("                        up to 512 each way -> i2c ok data=<hex>");
+    puts("  i2c recover           clock SCL until SDA is released, then STOP");
     puts("  dbg                   FX2 link internals (EP6 room, PIO PC, DMA)");
     puts("  prof                  write engine: streaming / flow-controlled / starved");
 }
@@ -128,6 +134,68 @@ static void cmd_stat(void) {
            fx2_counter_running() ? "running" : "stopped",
            (unsigned long long)fx2_counter_words(),
            gpio_get(PIN_EXT_VCC_SENSE));
+    printf("stat vcc_en=%d vcom_en=%d pull=%d i2c=%s i2c_rate=%lu\n",
+           gpio_get_out_level(PIN_EXT_VCC_EN), gpio_get_out_level(PIN_EXT_VCOM_EN),
+           gpio_is_dir_out(PIN_EXT_I2C_PULL_EN) && gpio_get_out_level(PIN_EXT_I2C_PULL_EN),
+           i2cm_enabled() ? "on" : "off", (unsigned long)i2cm_rate());
+}
+
+static int hex_nibble(char c) {
+    if (c >= '0' && c <= '9') return c - '0';
+    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+    if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+    return -1;
+}
+
+// `i2c ...`. The DeckCtrl protocol and everything else on top of raw
+// transfers lives on the host.
+static void cmd_i2c(char *a1, char *a2, char *a3, char *a4) {
+    static uint8_t w[I2CM_MAX_XFER], r[I2CM_MAX_XFER];
+    if (!a1) {
+        puts("err usage: i2c on [hz]|off|xfer <addr> <hex|-> <n>|recover");
+    } else if (!strcmp(a1, "on")) {
+        uint32_t hz = a2 ? (uint32_t)strtoul(a2, NULL, 0) : 400000;
+        if (hz < 10000 || hz > 1000000) {
+            puts("err i2c rate out of range (10000..1000000)");
+            return;
+        }
+        printf("i2c ok on rate=%lu\n", (unsigned long)i2cm_enable(hz));
+    } else if (!strcmp(a1, "off")) {
+        i2cm_disable();
+        puts("i2c ok off");
+    } else if (!strcmp(a1, "recover")) {
+        printf("i2c ok recover sda=%d\n", i2cm_recover());
+    } else if (!strcmp(a1, "xfer") && a2 && a3 && a4) {
+        char *end;
+        unsigned long addr = strtoul(a2, &end, 0);
+        unsigned long rn = strtoul(a4, NULL, 0);
+        size_t hl = strcmp(a3, "-") ? strlen(a3) : 0;
+        if (*end || addr > 0x7f || hl % 2 || hl / 2 > I2CM_MAX_XFER || rn > I2CM_MAX_XFER
+            || (hl == 0 && rn == 0)) {
+            puts("err usage: i2c xfer <addr> <hex|-> <n>, 1..512 bytes each way");
+            return;
+        }
+        size_t wn = hl / 2;
+        for (size_t i = 0; i < wn; i++) {
+            int hi = hex_nibble(a3[2 * i]), lo = hex_nibble(a3[2 * i + 1]);
+            if (hi < 0 || lo < 0) {
+                puts("err i2c: bad hex");
+                return;
+            }
+            w[i] = (uint8_t)(hi << 4 | lo);
+        }
+        switch (i2cm_xfer((uint8_t)addr, w, wn, r, rn)) {
+        case I2CM_OFF:     puts("err i2c is off; `i2c on` first"); return;
+        case I2CM_NAK:     puts("err i2c nak"); return;
+        case I2CM_TIMEOUT: puts("err i2c timeout"); return;
+        case I2CM_OK:      break;
+        }
+        printf("i2c ok data=");
+        for (size_t i = 0; i < rn; i++) printf("%02x", r[i]);
+        putchar('\n');
+    } else {
+        puts("err usage: i2c on [hz]|off|xfer <addr> <hex|-> <n>|recover");
+    }
 }
 
 // Serve the boot image from a fresh count, then start IFCLK and release reset.
@@ -257,6 +325,8 @@ static void handle(char *line) {
             gpio_put(pin, !strcmp(a2, "on"));
             printf("pwr ok %s=%s\n", a1, a2);
         }
+    } else if (!strcmp(cmd, "i2c")) {
+        cmd_i2c(a1, a2, a3, a4);
     } else if (!strcmp(cmd, "pins")) {
         static const char *names[16] = {"IO_1", "IO_2", "IO_3", "IO_4", "MISO", "OW", "SCK",
                                         "MOSI", "WKUP", "N_IO_1", "TX2", "RX2", "TX1", "RX1",
@@ -291,7 +361,8 @@ int main(void) {
     // The deck is one device to the user: the FX2 boots with the RP2350.
     fx2_up();
 
-    char line[64];
+    // Long enough for `i2c xfer` with 512 bytes of hex.
+    char line[1100];
     uint len = 0;
     absolute_time_t next_blink = get_absolute_time();
     bool led = false;
