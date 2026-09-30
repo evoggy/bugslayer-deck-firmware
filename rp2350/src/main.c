@@ -22,7 +22,7 @@
 #include "fx2_link.h"
 #include "i2c_master.h"
 
-#define FW_VERSION "0.5.0"
+#define FW_VERSION "0.5.1"
 
 static char s_serial[PICO_UNIQUE_BOARD_ID_SIZE_BYTES * 2 + 1];
 
@@ -76,6 +76,38 @@ static void board_init(void) {
     pico_get_unique_board_id_string(s_serial, sizeof(s_serial));
 }
 
+// VCOM on the port, as far as the firmware can tell (there is no VCOM sense):
+// switched on by us, or a Crazyflie powers the port. A Crazyflie with VCC up
+// has VCOM up too. VCC that we switched on ourselves says nothing about VCOM.
+//
+// Decks that run their logic from VCOM (the Lighthouse deck's iCE40 sits on an
+// LDO off VCOM and ignores VCC) are unpowered without it. Anything we hold
+// high on their pins then back-powers them through the input clamp diodes,
+// and the iCE40's power-on reset does not survive that. Our only source of
+// that today is the I2C pull-ups: the I2C master is open drain, capture only
+// listens.
+static bool port_vcom_present(void) {
+    if (gpio_get_out_level(PIN_EXT_VCOM_EN)) return true;
+    return gpio_get(PIN_EXT_VCC_SENSE) && !gpio_get_out_level(PIN_EXT_VCC_EN);
+}
+
+static bool pull_is_on(void) {
+    return gpio_is_dir_out(PIN_EXT_I2C_PULL_EN) && gpio_get_out_level(PIN_EXT_I2C_PULL_EN);
+}
+
+static void pull_off(void) {
+    gpio_set_dir(PIN_EXT_I2C_PULL_EN, GPIO_IN);
+}
+
+// VCOM went away under the pull-ups (a Crazyflie switched off): let go.
+// Not bulletproof: the pull-ups can back-feed a switched-off Crazyflie's VCC
+// through its own I2C pull-ups and hold the sense high.
+static void vcom_interlock_poll(void) {
+    // Silent: an unsolicited line would be taken as a command's reply. `stat`
+    // and the `pwr` reply show it.
+    if (pull_is_on() && !port_vcom_present()) pull_off();
+}
+
 static void update_leds(void) {
     gpio_put(LED_FX2_UP, fx2_link_is_up());
     capture_status_t cs;
@@ -104,7 +136,8 @@ static void cmd_help(void) {
     puts("                        fx2tool RAM loads, rom = silent, 04b4:8613");
     puts("  fx2 test start|stop   stage 1 pipe test: raw 32-bit counter into the FX2");
     puts("  pwr vcc|vcom on|off   high-side switches");
-    puts("  pull on|off           I2C pull-ups (standalone only!); off = Hi-Z, never low");
+    puts("  pull on|off           I2C pull-ups (standalone only!); off = Hi-Z, never low.");
+    puts("                        on needs VCOM on the port; dropped if VCOM goes away");
     puts("  pins                  live level of every CF signal");
     puts("  i2c on [hz]|off       I2C1 master on SDA/SCL (default 400000); off = Hi-Z");
     puts("  i2c xfer <addr> <hex|-> <n>");
@@ -134,9 +167,9 @@ static void cmd_stat(void) {
            fx2_counter_running() ? "running" : "stopped",
            (unsigned long long)fx2_counter_words(),
            gpio_get(PIN_EXT_VCC_SENSE));
-    printf("stat vcc_en=%d vcom_en=%d pull=%d i2c=%s i2c_rate=%lu\n",
+    printf("stat vcc_en=%d vcom_en=%d vcom=%d pull=%d i2c=%s i2c_rate=%lu\n",
            gpio_get_out_level(PIN_EXT_VCC_EN), gpio_get_out_level(PIN_EXT_VCOM_EN),
-           gpio_is_dir_out(PIN_EXT_I2C_PULL_EN) && gpio_get_out_level(PIN_EXT_I2C_PULL_EN),
+           port_vcom_present(), pull_is_on(),
            i2cm_enabled() ? "on" : "off", (unsigned long)i2cm_rate());
 }
 
@@ -322,8 +355,11 @@ static void handle(char *line) {
         if (pin == 0xff) {
             puts("err usage: pwr vcc|vcom on|off");
         } else {
-            gpio_put(pin, !strcmp(a2, "on"));
-            printf("pwr ok %s=%s\n", a1, a2);
+            bool on = !strcmp(a2, "on");
+            gpio_put(pin, on);
+            // Our VCOM (or a CF's VCC, once masked by ours) may be gone now.
+            vcom_interlock_poll();
+            printf("pwr ok %s=%s pull=%d\n", a1, a2, pull_is_on());
         }
     } else if (!strcmp(cmd, "i2c")) {
         cmd_i2c(a1, a2, a3, a4);
@@ -337,10 +373,15 @@ static void handle(char *line) {
     } else if (!strcmp(cmd, "pull") && a1) {
         // Pull-up supply: high = 2.2k pull-ups on (standalone only), Hi-Z = off.
         if (!strcmp(a1, "on")) {
+            if (!port_vcom_present()) {
+                puts("err no VCOM on the port: `pwr vcom on` first (unpowered decks "
+                     "would be back-powered through their pins)");
+                return;
+            }
             gpio_put(PIN_EXT_I2C_PULL_EN, 1);
             gpio_set_dir(PIN_EXT_I2C_PULL_EN, GPIO_OUT);
         } else {
-            gpio_set_dir(PIN_EXT_I2C_PULL_EN, GPIO_IN);
+            pull_off();
         }
         printf("pull ok %s\n", a1);
     } else {
@@ -375,6 +416,7 @@ int main(void) {
             next_blink = delayed_by_ms(get_absolute_time(), 500);
         }
         update_leds();
+        vcom_interlock_poll();
 
         tud_task();
         capture_poll();

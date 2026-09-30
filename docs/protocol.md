@@ -179,8 +179,9 @@ stream format is unaffected.
 > arm <rate_hz> ... spi      adds stream 1, ENC_SCK8 (pins source only)
 > disarm                     < disarm ok session=3852125629 samples=305007 overruns=0 lost=0
 > fx2 reset|status           < fx2 ok
-> pwr vcc on|off             < pwr ok
+> pwr vcc|vcom on|off        < pwr ok vcc=on pull=1
 > pull on|off                < pull ok           (I2C pull-ups, standalone only)
+                             | err no VCOM on the port: ...
 > i2c on [hz]|off            < i2c ok on rate=400000     (I2C1 master on SDA/SCL; off = Hi-Z)
 > i2c xfer <addr> <hex|-> <n>
                              < i2c ok data=<hex>  | err i2c nak | err i2c timeout
@@ -191,7 +192,16 @@ stream format is unaffected.
 START; up to 512 bytes each way. The master is off at boot and after `i2c off`,
 so the pins stay invisible to a Crazyflie; protocols on top (DeckCtrl) live on
 the host. `stat` has a third line with the power and bus state:
-`stat vcc_en=1 vcom_en=1 pull=1 i2c=off i2c_rate=0`.
+`stat vcc_en=1 vcom_en=1 vcom=1 pull=1 i2c=off i2c_rate=0`.
+
+VCOM interlock: `pull on` is refused unless VCOM is on the port (`vcom=1`), i.e.
+the deck switched VCOM on, or a Crazyflie powers the port (VCC present that the
+deck did not switch on). Decks that run from VCOM and ignore VCC, like the
+Lighthouse deck's iCE40, would otherwise be back-powered through SDA/SCL. The
+pull-ups are also released when VCOM goes away (`pwr vcom off`, or the
+Crazyflie switches off); the `pwr` reply shows the resulting `pull=`. There is
+no VCOM sense on rev A, so a switched-off Crazyflie whose VCC rail is held up
+through its own pull-ups can hide that last case.
 
 `arm` takes a source (`pins`, the 16 CF signals, default, or the synthetic `counter`) and a
 sink (`usb`, default, or `fx2`), in either order. Both sinks carry the same blocks. If a
