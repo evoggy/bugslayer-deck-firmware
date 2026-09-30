@@ -170,7 +170,7 @@ port). The LEDs and SWO lines belong to the physical connector, not the index.
 | 2 | CMSIS-DAP SWD2 (P5) | `35f0:db11-2` / interface 2 | P5, silkscreen "2" | `LED2_*`, GP19/20 (beside P5) | nRF51 |
 | 3 | CMSIS-DAP SWD3 (deck port) | `35f0:db11-3` / interface 3 | deck port IO_1/IO_2/IO_4 | `LED3_*`, GP21/22 (top edge, right pair) | — |
 | 4+5 | SWO ACM0 | — | SWO of SWD1 (P1, GP5) | | STM32 SWO |
-| 6+7 | SWO ACM1 | — | SWO of SWD2 (P5, GP9) | | nRF51 SWO |
+| 6+7 | SWO ACM1 | — | SWO of SWD2 (P5, GP9) | | — (the nRF51 is a Cortex-M0: no SWO) |
 
 The CMSIS-DAP interfaces come first because old Keil MDK only looks at interface 0. **ACM0/ACM1
 are the firmware's names, not the host's device numbers.** The host numbers CDC ports in
@@ -180,6 +180,12 @@ works on any machine with no setup: on Linux `/dev/serial/by-id/usb-Bitcraze_AB_
 is SWO ACM0 and `...-if06` is SWO ACM1; on Windows, Device Manager shows the interface name. SWO1
 and SWO2 share UART1, so only one is active at a time: ACM0 starts on SWO1, and ACM1 starts
 unbound (select with DAP vendor command 0x92).
+
+The STM32 drives SWO (PB3 = JTDO/TRACESWO) **only while its debug port is in SWD mode**. It
+powers up in JTAG mode, and OpenOCD sends SWD-to-JTAG when it exits, so SWO goes silent after
+every OpenOCD session even though the ITM keeps running. `bsly swo` switches it back through
+SWD1 at start and whenever a debugger releases the port. The Crazyflie firmware sets up the
+ITM and TPIU itself with `CONFIG_DEBUG_PRINT_ON_SWO` (2 Mbaud default).
 
 In the schematic the RP2350 port's LED nets are still named `LED4_*` (rev A predates the
 renumbering).
