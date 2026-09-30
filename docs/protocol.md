@@ -186,7 +186,21 @@ stream format is unaffected.
 > i2c xfer <addr> <hex|-> <n>
                              < i2c ok data=<hex>  | err i2c nak | err i2c timeout
 > i2c recover                < i2c ok recover sda=1
+> uart 1|2 on|off            < uart ok 1=on baud=230400
+                             | err no VCOM on the port: ... | err a Crazyflie powers the port ...
 ```
+
+**UART bridge.** `uart 1|2 on` connects the Crazyflie's UART1 (uart0, GP28 TX /
+GP29 RX) or UART2 (uart1 via UART_AUX, GP26/GP27) to CDC interface 3 or 5 of
+this device (Linux: `/dev/serial/by-id/...deck_control_<serial>-if03` / `-if05`).
+The deck stands in for the Crazyflie: host writes go out on TX, the RX pin
+comes back to the host. Rate and format follow the host's line coding on that
+port (open it at the deck's rate). Standalone only: refused, and switched off
+again, when a Crazyflie powers the port (its STM32 drives TX) or when VCOM is
+missing (TX idles high and would back-power VCOM-only decks). Capture keeps
+seeing both lines. `stat`'s fourth line: `stat uart1=on uart1_baud=230400
+uart1_dropped=0 uart2=off ...`; dropped counts RX bytes lost to a full ring or
+a UART FIFO overrun. RX bytes are thrown away while the host has the port closed.
 
 `i2c xfer` writes the hex bytes (`-` for none), then reads `n` with a repeated
 START; up to 512 bytes each way. The master is off at boot and after `i2c off`,

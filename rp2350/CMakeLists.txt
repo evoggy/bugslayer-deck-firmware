@@ -20,6 +20,7 @@ add_executable(bugslayer_deck
     src/sampler.c
     src/usb_stream.c
     src/usb_descriptors.c
+    src/uart_bridge.c
 )
 
 pico_generate_pio_header(bugslayer_deck ${CMAKE_CURRENT_LIST_DIR}/pio/fx2_write.pio)

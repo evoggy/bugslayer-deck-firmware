@@ -1,5 +1,5 @@
 // USB descriptors for the RP2350 control plane: CDC (control) + vendor bulk IN
-// (capture stream). Replaces pico_stdio_usb's default descriptors; stdio still
+// (capture stream) + two CDC ports bridging the Crazyflie's UART1/UART2. Replaces pico_stdio_usb's default descriptors; stdio still
 // runs over CDC 0. See tusb_config.h.
 
 #include <string.h>
@@ -16,6 +16,10 @@ enum {
     ITF_CDC_CTRL = 0,
     ITF_CDC_DATA,
     ITF_STREAM,          // == USB_STREAM_ITF, the capture stream
+    ITF_CDC_UART1,       // uart_bridge.c; TinyUSB CDC instance 1
+    ITF_CDC_UART1_DATA,
+    ITF_CDC_UART2,       // CDC instance 2
+    ITF_CDC_UART2_DATA,
     ITF_COUNT,
 };
 _Static_assert(ITF_STREAM == USB_STREAM_ITF, "host tools claim this interface number");
@@ -25,6 +29,12 @@ _Static_assert(ITF_STREAM == USB_STREAM_ITF, "host tools claim this interface nu
 #define EP_CDC_IN      0x82
 #define EP_STREAM_OUT  0x03   // unused; the vendor class wants a pair
 #define EP_STREAM_IN   USB_STREAM_EP_IN
+#define EP_UART1_NOTIF 0x84
+#define EP_UART1_OUT   0x05
+#define EP_UART1_IN    0x85
+#define EP_UART2_NOTIF 0x86
+#define EP_UART2_OUT   0x06
+#define EP_UART2_IN    0x87
 
 enum {
     STR_LANGID = 0,
@@ -33,6 +43,8 @@ enum {
     STR_SERIAL,
     STR_CDC,
     STR_STREAM,
+    STR_UART1,
+    STR_UART2,
     STR_COUNT,
 };
 
@@ -49,19 +61,21 @@ static const tusb_desc_device_t desc_device = {
     .bMaxPacketSize0    = CFG_TUD_ENDPOINT0_SIZE,
     .idVendor           = USB_VID,
     .idProduct          = USB_PID,
-    .bcdDevice          = 0x0200,
+    .bcdDevice          = 0x0201,   // bump when the interfaces change (Windows caches them)
     .iManufacturer      = STR_MANUFACTURER,
     .iProduct           = STR_PRODUCT,
     .iSerialNumber      = STR_SERIAL,
     .bNumConfigurations = 1,
 };
 
-#define CONFIG_TOTAL_LEN (TUD_CONFIG_DESC_LEN + TUD_CDC_DESC_LEN + TUD_VENDOR_DESC_LEN)
+#define CONFIG_TOTAL_LEN (TUD_CONFIG_DESC_LEN + 3 * TUD_CDC_DESC_LEN + TUD_VENDOR_DESC_LEN)
 
 static const uint8_t desc_configuration[] = {
     TUD_CONFIG_DESCRIPTOR(1, ITF_COUNT, 0, CONFIG_TOTAL_LEN, 0, 250),
     TUD_CDC_DESCRIPTOR(ITF_CDC_CTRL, STR_CDC, EP_CDC_NOTIF, 8, EP_CDC_OUT, EP_CDC_IN, 64),
     TUD_VENDOR_DESCRIPTOR(ITF_STREAM, STR_STREAM, EP_STREAM_OUT, EP_STREAM_IN, 64),
+    TUD_CDC_DESCRIPTOR(ITF_CDC_UART1, STR_UART1, EP_UART1_NOTIF, 8, EP_UART1_OUT, EP_UART1_IN, 64),
+    TUD_CDC_DESCRIPTOR(ITF_CDC_UART2, STR_UART2, EP_UART2_NOTIF, 8, EP_UART2_OUT, EP_UART2_IN, 64),
 };
 
 // --- MS OS 2.0: bind WinUSB to the stream interface, no INF, no Zadig ---
@@ -134,6 +148,8 @@ static const char *const desc_strings[STR_COUNT] = {
     [STR_SERIAL]       = s_serial,   // flash unique ID; the FX2 reports the same one
     [STR_CDC]          = "Bugslayer control",
     [STR_STREAM]       = "Bugslayer capture stream",
+    [STR_UART1]        = "Bugslayer UART1",
+    [STR_UART2]        = "Bugslayer UART2",
 };
 
 const uint16_t *tud_descriptor_string_cb(uint8_t index, uint16_t langid) {

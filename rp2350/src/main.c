@@ -21,8 +21,9 @@
 #include "fx2_boot.h"
 #include "fx2_link.h"
 #include "i2c_master.h"
+#include "uart_bridge.h"
 
-#define FW_VERSION "0.5.1"
+#define FW_VERSION "0.6.0"
 
 static char s_serial[PICO_UNIQUE_BOARD_ID_SIZE_BYTES * 2 + 1];
 
@@ -76,6 +77,11 @@ static void board_init(void) {
     pico_get_unique_board_id_string(s_serial, sizeof(s_serial));
 }
 
+// VCC on the port that we did not switch on.
+static bool crazyflie_present(void) {
+    return gpio_get(PIN_EXT_VCC_SENSE) && !gpio_get_out_level(PIN_EXT_VCC_EN);
+}
+
 // VCOM on the port, as far as the firmware can tell (there is no VCOM sense):
 // switched on by us, or a Crazyflie powers the port. A Crazyflie with VCC up
 // has VCOM up too. VCC that we switched on ourselves says nothing about VCOM.
@@ -83,12 +89,12 @@ static void board_init(void) {
 // Decks that run their logic from VCOM (the Lighthouse deck's iCE40 sits on an
 // LDO off VCOM and ignores VCC) are unpowered without it. Anything we hold
 // high on their pins then back-powers them through the input clamp diodes,
-// and the iCE40's power-on reset does not survive that. Our only source of
-// that today is the I2C pull-ups: the I2C master is open drain, capture only
-// listens.
+// and the iCE40's power-on reset does not survive that. Our sources of that
+// are the I2C pull-ups and the UART bridge's idle-high TX: the I2C master is
+// open drain, capture only listens.
 static bool port_vcom_present(void) {
     if (gpio_get_out_level(PIN_EXT_VCOM_EN)) return true;
-    return gpio_get(PIN_EXT_VCC_SENSE) && !gpio_get_out_level(PIN_EXT_VCC_EN);
+    return crazyflie_present();
 }
 
 static bool pull_is_on(void) {
@@ -102,10 +108,15 @@ static void pull_off(void) {
 // VCOM went away under the pull-ups (a Crazyflie switched off): let go.
 // Not bulletproof: the pull-ups can back-feed a switched-off Crazyflie's VCC
 // through its own I2C pull-ups and hold the sense high.
-static void vcom_interlock_poll(void) {
+// The UART bridge also lets go when a Crazyflie shows up: its STM32 drives TX.
+static void port_interlock_poll(void) {
     // Silent: an unsolicited line would be taken as a command's reply. `stat`
     // and the `pwr` reply show it.
-    if (pull_is_on() && !port_vcom_present()) pull_off();
+    bool vcom = port_vcom_present();
+    if (pull_is_on() && !vcom) pull_off();
+    for (uint i = 0; i < UART_BRIDGE_PORTS; i++) {
+        if (uart_bridge_on(i) && (!vcom || crazyflie_present())) uart_bridge_set(i, false);
+    }
 }
 
 static void update_leds(void) {
@@ -144,6 +155,9 @@ static void cmd_help(void) {
     puts("                        write the bytes (- for none), repeated START, read n;");
     puts("                        up to 512 each way -> i2c ok data=<hex>");
     puts("  i2c recover           clock SCL until SDA is released, then STOP");
+    puts("  uart 1|2 on|off       bridge the CF's UART1/UART2 to CDC port 1/2 (standalone");
+    puts("                        only, needs VCOM): the deck drives TX and reads RX like");
+    puts("                        the Crazyflie; the rate follows the port's line coding");
     puts("  dbg                   FX2 link internals (EP6 room, PIO PC, DMA)");
     puts("  prof                  write engine: streaming / flow-controlled / starved");
 }
@@ -171,6 +185,36 @@ static void cmd_stat(void) {
            gpio_get_out_level(PIN_EXT_VCC_EN), gpio_get_out_level(PIN_EXT_VCOM_EN),
            port_vcom_present(), pull_is_on(),
            i2cm_enabled() ? "on" : "off", (unsigned long)i2cm_rate());
+    printf("stat");
+    for (uint i = 0; i < UART_BRIDGE_PORTS; i++) {
+        printf(" uart%u=%s uart%u_baud=%lu uart%u_dropped=%lu", i + 1,
+               uart_bridge_on(i) ? "on" : "off", i + 1, (unsigned long)uart_bridge_baud(i),
+               i + 1, (unsigned long)uart_bridge_dropped(i));
+    }
+    putchar('\n');
+}
+
+// `uart 1|2 on|off`
+static void cmd_uart(char *a1, char *a2) {
+    uint32_t n = a1 ? (uint32_t)strtoul(a1, NULL, 10) : 0;
+    if (n < 1 || n > UART_BRIDGE_PORTS || !a2 || (strcmp(a2, "on") && strcmp(a2, "off"))) {
+        puts("err usage: uart 1|2 on|off");
+        return;
+    }
+    bool on = !strcmp(a2, "on");
+    if (on && crazyflie_present()) {
+        puts("err a Crazyflie powers the port and its STM32 drives TX1/TX2; the bridge is "
+             "standalone only (use capture/`bsly uart` to sniff)");
+        return;
+    }
+    if (on && !port_vcom_present()) {
+        puts("err no VCOM on the port: `pwr vcom on` first (unpowered decks would be "
+             "back-powered through TX)");
+        return;
+    }
+    uart_bridge_set(n - 1, on);
+    printf("uart ok %lu=%s baud=%lu\n", (unsigned long)n, a2,
+           (unsigned long)uart_bridge_baud(n - 1));
 }
 
 static int hex_nibble(char c) {
@@ -357,12 +401,14 @@ static void handle(char *line) {
         } else {
             bool on = !strcmp(a2, "on");
             gpio_put(pin, on);
-            // Our VCOM (or a CF's VCC, once masked by ours) may be gone now.
-            vcom_interlock_poll();
+            // Our VCOM may be gone now, or a Crazyflie's VCC unmasked by ours.
+            port_interlock_poll();
             printf("pwr ok %s=%s pull=%d\n", a1, a2, pull_is_on());
         }
     } else if (!strcmp(cmd, "i2c")) {
         cmd_i2c(a1, a2, a3, a4);
+    } else if (!strcmp(cmd, "uart")) {
+        cmd_uart(a1, a2);
     } else if (!strcmp(cmd, "pins")) {
         static const char *names[16] = {"IO_1", "IO_2", "IO_3", "IO_4", "MISO", "OW", "SCK",
                                         "MOSI", "WKUP", "N_IO_1", "TX2", "RX2", "TX1", "RX1",
@@ -398,6 +444,7 @@ int main(void) {
     fx2_boot_init(s_serial);
     fx2_link_init();
     capture_init();
+    uart_bridge_init();
 
     // The deck is one device to the user: the FX2 boots with the RP2350.
     fx2_up();
@@ -416,7 +463,8 @@ int main(void) {
             next_blink = delayed_by_ms(get_absolute_time(), 500);
         }
         update_leds();
-        vcom_interlock_poll();
+        port_interlock_poll();
+        uart_bridge_poll();
 
         tud_task();
         capture_poll();

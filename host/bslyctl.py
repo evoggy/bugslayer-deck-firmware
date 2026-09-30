@@ -18,6 +18,9 @@ VID, PID = 0x35F0, 0xDB12
 
 def find_port(serial_number=None):
     for p in list_ports.comports():
+        # Interface 0 is the control channel; 3 and 5 are the UART bridge ports.
+        if p.location and not p.location.endswith(".0"):
+            continue
         if p.vid == VID and p.pid == PID and (serial_number is None or p.serial_number == serial_number):
             return p.device
     sys.exit(f"no Bugslayer deck control port ({VID:04x}:{PID:04x}) found")
