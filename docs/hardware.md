@@ -149,14 +149,40 @@ JST-SH ports** plus two internal SWD targets. As built:
 | GP1 | test pad | **TP1** (1 mm pad) |
 | GP2–GP5 | SWD1 CLK / IO / NRST / **SWO** | **P1** (JST-SH, hand-soldered — C160405 was out of stock) |
 | GP6–GP9 | SWD2 CLK / IO / NRST / **SWO** | **P5** (JST-SH, hand-soldered) |
-| GP10, GP11 | `EXT_SWD_CLK` / `EXT_SWD_IO` | the deck port's **IO_1 / IO_2** (P3.6/P3.7) — shared with RP2350 GP16/GP17 |
+| GP10, GP11 | SWD3 `EXT_SWD_CLK` / `EXT_SWD_IO` | the deck port's **IO_1 / IO_2** (P3.6/P3.7) — shared with RP2350 GP16/GP17 |
 | GP12 | `EXT_SWD_nRST` | the deck port's **IO_4** via R3 0 R — shared with RP2350 GP19 |
-| GP13–GP15 | CLK / IO / nRST | the **RP2350's own SWD** (U5 pins 33/34/35) |
+| GP13–GP15 | SWD0 CLK / IO / nRST | the **RP2350's own SWD** (U5 pins 33/34/35) |
 | GP17–GP24 | `LEDn_CONNECTED` / `LEDn_RUNNING` ×4 | |
 
 ⚠️ **GP10/GP11/GP12 are shared with the Crazyflie bus.** Keep them Hi-Z unless the
 SWD-on-EXP mode is selected, or the probe will fight the RP2350 and whatever is
 driving IO_1/IO_2/IO_4 — they are chip-select candidates on a real stack.
+
+### USB interfaces (`35F0:DB11`)
+
+The probe index is the SWD port number (since 2026-09-30; before, the RP2350 was the last
+port). The LEDs and SWO lines belong to the physical connector, not the index.
+
+| USB interface | Name | probe-rs / OpenOCD | Goes to | LEDs (net, GPIO) | On a Crazyflie |
+|---|---|---|---|---|---|
+| 0 | CMSIS-DAP SWD0 (RP2350) | `35f0:db11-0` / `cmsis-dap usb interface 0` | the on-board RP2350 | `LED4_*`, GP23/24 (top edge, left pair) | — |
+| 1 | CMSIS-DAP SWD1 (P1) | `35f0:db11-1` / interface 1 | P1, silkscreen "1" | `LED1_*`, GP17/18 (beside P1) | STM32 |
+| 2 | CMSIS-DAP SWD2 (P5) | `35f0:db11-2` / interface 2 | P5, silkscreen "2" | `LED2_*`, GP19/20 (beside P5) | nRF51 |
+| 3 | CMSIS-DAP SWD3 (deck port) | `35f0:db11-3` / interface 3 | deck port IO_1/IO_2/IO_4 | `LED3_*`, GP21/22 (top edge, right pair) | — |
+| 4+5 | SWO ACM0 | — | SWO of SWD1 (P1, GP5) | | STM32 SWO |
+| 6+7 | SWO ACM1 | — | SWO of SWD2 (P5, GP9) | | nRF51 SWO |
+
+The CMSIS-DAP interfaces come first because old Keil MDK only looks at interface 0. **ACM0/ACM1
+are the firmware's names, not the host's device numbers.** The host numbers CDC ports in
+enumeration order across every USB device (on Linux the RP2350's console is a `ttyACM` too),
+so `SWO ACM0` is not necessarily `/dev/ttyACM0`. Pick the port by its interface instead, which
+works on any machine with no setup: on Linux `/dev/serial/by-id/usb-Bitcraze_AB_Bugslayer_probe_*-if04`
+is SWO ACM0 and `...-if06` is SWO ACM1; on Windows, Device Manager shows the interface name. SWO1
+and SWO2 share UART1, so only one is active at a time: ACM0 starts on SWO1, and ACM1 starts
+unbound (select with DAP vendor command 0x92).
+
+In the schematic the RP2350 port's LED nets are still named `LED4_*` (rev A predates the
+renumbering).
 
 ## Board-level
 

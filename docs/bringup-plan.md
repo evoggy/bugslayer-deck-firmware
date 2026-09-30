@@ -59,8 +59,10 @@ flash, USB routing through the CH334 and BOOTSEL recovery.
 **0b. RP2040 probe.** Flash `rp2040/` over the RP2040's BOOTSEL (SW2). It enumerates as
 `35F0:DB11` with four CMSIS-DAP interfaces, one per SWD port. See
 [../rp2040/README.md](../rp2040/README.md).
-→ *Pass: `probe-rs list` shows four probes, and `probe-rs info --probe 35f0:db11-3` sees the
-RP2350. From then on the RP2350 can be flashed over SWD4 instead of BOOTSEL.*
+→ *Pass: `probe-rs list` shows four probes, and `probe-rs info --probe 35f0:db11-0` sees the
+RP2350. From then on the RP2350 can be flashed over SWD0 instead of BOOTSEL.* (Until
+2026-09-30 the RP2350 was the last port, SWD4 = `db11-3`; the results table below uses the old
+numbering.)
 
 **0c. FX2 with no firmware at all.** Leave `FX_RESET#` released and the RP2350 silent on I²C.
 The FX2's boot ROM finds no EEPROM at 0xA2 and enumerates as **`04B4:8613`**.

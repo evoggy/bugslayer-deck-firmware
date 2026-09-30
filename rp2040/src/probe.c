@@ -79,7 +79,7 @@ static struct _probe probes[MAX_DAP_PROBES] = {
 
 // Pins stay Hi-Z with no pulls until a debugger connects (probe_init). RP2040 pads
 // come out of reset with a pull-down, which would load the target's pull-ups -
-// on SWD4 it drags the RP2350's RUN pin towards mid-rail.
+// on SWD0 it drags the RP2350's RUN pin towards mid-rail.
 void DAP_SETUP (uint32_t probeId) 
 {
     assert(probeId < MAX_DAP_PROBES);    

@@ -78,11 +78,11 @@ builds without SDCC installed.
 ```
 cmake -B build -DPICO_SDK_PATH=/path/to/pico-sdk
 cmake --build build -j
-probe-rs download --probe 35f0:db11-3 --chip RP235x build/bugslayer_deck.elf
-probe-rs reset    --probe 35f0:db11-3 --chip RP235x
+probe-rs download --probe 35f0:db11-0 --chip RP235x build/bugslayer_deck.elf
+probe-rs reset    --probe 35f0:db11-0 --chip RP235x
 ```
 
-The on-board RP2040 probe's SWD4 flashes the RP2350 directly, with no BOOTSEL needed. Resetting
+The on-board RP2040 probe's SWD0 flashes the RP2350 directly, with no BOOTSEL needed. Resetting
 the RP2350 also resets the FX2 (FX_RESET# falls back to its pull-down), so RAM-loaded FX2
 firmware has to be loaded again. Verified against pico-sdk 2.2.0 and arm-none-eabi-gcc 13.2.
 

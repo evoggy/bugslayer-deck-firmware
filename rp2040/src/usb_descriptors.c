@@ -138,10 +138,10 @@ char const* string_desc_arr [] =
   "CMSIS-DAP v2 Interface", // 5: Interface descriptor for Bulk transport
   "SWO ACM0", // 6: Interface descriptor for CDC 0
   "SWO ACM1", // 7: Interface descriptor for CDC 1
-  PROBE_ITF0_STRING, // 8: CMSIS-DAP v2, port 1
-  PROBE_ITF1_STRING, // 9: CMSIS-DAP v2, port 2
-  PROBE_ITF2_STRING, // 10: CMSIS-DAP v2, port 3
-  PROBE_ITF3_STRING, // 11: CMSIS-DAP v2, port 4
+  PROBE_ITF0_STRING, // 8: CMSIS-DAP v2, SWD0
+  PROBE_ITF1_STRING, // 9: CMSIS-DAP v2, SWD1
+  PROBE_ITF2_STRING, // 10: CMSIS-DAP v2, SWD2
+  PROBE_ITF3_STRING, // 11: CMSIS-DAP v2, SWD3
 };
 
 static uint16_t _desc_str[32];

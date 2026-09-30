@@ -28,11 +28,11 @@ Design notes: Obsidian `Projects/Bugslayer/Deck/`.
 │ CMSIS-DAP│   │ control  │ slave  │  bulk IN    │
 └─┬─┬─┬─┬──┘   └────┬─────┘  FIFO  └─────────────┘
   │ │ │ │             │
- SWD1..4          CF expansion port (16 signals)
+ SWD0..3          CF expansion port (16 signals)
 ```
 
-SWD1/SWD2 go to 6-pin JST-SH connectors, SWD3 to the CF deck port (IO_1/IO_2/IO_4), and
-SWD4 to the RP2350.
+SWD0 goes to the RP2350, SWD1/SWD2 to the 6-pin JST-SH connectors P1/P5, and SWD3 to the CF
+deck port (IO_1/IO_2/IO_4). Port SWDn is probe-rs `35f0:db11-n`.
 
 - **RP2040** — four independent SWD ports, each with its own CONNECTED/RUNNING LED: two
   6-pin JST-SH connectors, the Crazyflie deck port (IO_1/IO_2/IO_4) and the on-board RP2350.
@@ -50,6 +50,12 @@ Bitcraze VID **0x35F0**, one PID per chip: **DB11** RP2040 probe, **DB12** RP235
 plane, **DB13** FX2 capture stream. The FX2 reports the *RP2350's* serial number, which is how
 the host pairs the two channels. Full table and the bring-up identities in
 [docs/protocol.md](docs/protocol.md).
+
+The probe's CMSIS-DAP interfaces 0–3 are SWD0 (RP2350), SWD1 (P1), SWD2 (P5) and SWD3 (deck
+port): probe-rs `35f0:db11-n` is port SWDn. Its two serial ports carry SWO: **SWO ACM0** from
+SWD1 and **SWO ACM1** from SWD2. Those are the firmware's names; the host assigns its own
+`ttyACM`/COM numbers in enumeration order. See [docs/hardware.md](docs/hardware.md) for the full
+interface table and how to find each port.
 
 ## Layout
 
@@ -99,6 +105,6 @@ enumerate behind the hub, and the RP2350 → FX2 → PC pipe carries 37.5 MB/s w
 | Firmware | Status |
 |---|---|
 | `rp2350/` | CDC command loop, FX2 self-boot, PIO pin sampler, block stream into its own USB or the FX2. **16.67 Msps through the FX2 with zero loss** |
-| `rp2040/` | 4-port CMSIS-DAP (MultiProbe port). **Runs**: four probes listed, SWD4 flashes the RP2350 |
+| `rp2040/` | 4-port CMSIS-DAP (MultiProbe port). **Runs**: four probes listed, SWD0 flashes the RP2350 |
 | `fx2/` | stage 1 — slave FIFO + WinUSB descriptors. **Passes stage 1 on hardware** (RAM-loaded) |
 | `host/` | `bslyctl.py`, `fx2_counter_test.py`, `stage1.sh`; see [host/README.md](host/README.md) |
