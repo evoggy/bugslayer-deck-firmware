@@ -1,12 +1,12 @@
 # Build the RP2350 firmware (the FX2 image is inside it, from rp2350/src/fx2_image.h)
-# on every push and PR; on a v* tag, also publish a GitHub release with
+# on every push and PR; on a version tag (0.8.0, no v), also publish a GitHub release with
 # the UF2 (bsly update downloads it from there).
 name: Build
 
 on:
   push:
     branches: [main]
-    tags: ["v*"]
+    tags: ["[0-9]+.[0-9]+.[0-9]+*"]
   pull_request:
 
 permissions:
@@ -37,8 +37,8 @@ jobs:
 
       - name: Version
         run: |
-          if [[ "$GITHUB_REF_TYPE" == tag ]]; then v="${GITHUB_REF_NAME#v}"
-          else v="$(git describe --tags --match 'v[0-9]*' --always --dirty | sed 's/^v//')"; fi
+          if [[ "$GITHUB_REF_TYPE" == tag ]]; then v="$GITHUB_REF_NAME"
+          else v="$(git describe --tags --match '[0-9]*.[0-9]*.[0-9]*' --always --dirty)"; fi
           echo "FW_VERSION=$v" >> "$GITHUB_ENV"
 
       - name: Build

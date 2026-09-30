@@ -11,17 +11,17 @@ set(CMAKE_CXX_STANDARD 17)
 
 pico_sdk_init()
 
-# Firmware version, reported by `ver`. Release builds pass -DFW_VERSION=<tag
-# without the v>; otherwise `git describe` at configure time (re-run cmake to
+# Firmware version, reported by `ver`. Release builds pass -DFW_VERSION=<tag>;
+# otherwise `git describe` at configure time (re-run cmake to
 # refresh it).
 if (NOT FW_VERSION)
-    execute_process(COMMAND git describe --tags --match "v[0-9]*" --always --dirty
+    execute_process(COMMAND git describe --tags --match "[0-9]*.[0-9]*.[0-9]*" --always --dirty
                     WORKING_DIRECTORY ${CMAKE_CURRENT_LIST_DIR}
                     OUTPUT_VARIABLE FW_VERSION OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
-    if (NOT FW_VERSION MATCHES "^v[0-9]")
-        set(FW_VERSION "0.0.0-g${FW_VERSION}")   # no release tag yet
+    # Without a release tag, describe falls back to a bare commit hash.
+    if (NOT FW_VERSION MATCHES "^[0-9]+\\.[0-9]+\\.[0-9]+")
+        set(FW_VERSION "0.0.0-g${FW_VERSION}")
     endif ()
-    string(REGEX REPLACE "^v" "" FW_VERSION "${FW_VERSION}")
 endif ()
 message(STATUS "Bugslayer deck RP2350 firmware ${FW_VERSION}")
 

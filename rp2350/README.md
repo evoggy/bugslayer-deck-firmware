@@ -82,10 +82,10 @@ probe-rs download --probe 35f0:db11-0 --chip RP235x build/bugslayer_deck.elf
 probe-rs reset    --probe 35f0:db11-0 --chip RP235x
 ```
 
-The version is the latest `v*` tag from `git describe` at configure time (re-run cmake to
+The version is the latest release tag (`X.Y.Z`, no `v`) from `git describe` at configure time (re-run cmake to
 refresh it), or `-DFW_VERSION=...`; `ver` reports it.
 
-**Releases.** Pushing a tag `vX.Y.Z` builds `bugslayer-rp2350-X.Y.Z.uf2` (plus the ELF and
+**Releases.** Pushing a tag `X.Y.Z` (no `v`) builds `bugslayer-rp2350-X.Y.Z.uf2` (plus the ELF and
 `SHA256SUMS`) in GitHub Actions (`.github/workflows/build.yml`) and publishes it as a release.
 `bsly update` installs it: `bootsel` reboots the RP2350 into its USB bootloader and bsly
 copies the UF2 to the `RP2350` drive. Firmware older than `bootsel` needs SW2 held while
