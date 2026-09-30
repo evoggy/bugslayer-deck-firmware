@@ -94,7 +94,7 @@ void process_uart_triggers(struct CDCUartInstance_t* uart, uint8_t* bufferIn, ui
 
 void tud_cdc_line_coding_cb(uint8_t itf, cdc_line_coding_t const* line_coding)
 {
-  if(itf > MAX_UART_DEVICES)
+  if(itf >= MAX_UART_DEVICES)
     return;
   struct CDCUartInstance_t* uart = &uartDevices[itf];
   if( !uart->isUartInitialised )
@@ -115,7 +115,7 @@ void tud_cdc_line_coding_cb(uint8_t itf, cdc_line_coding_t const* line_coding)
 
 void tud_cdc_line_state_cb(uint8_t itf, bool dtr, bool rts)
 {
-  if(itf > MAX_UART_DEVICES)
+  if(itf >= MAX_UART_DEVICES)
     return;
   struct CDCUartInstance_t* uart = &uartDevices[itf];
   if( !uart->isUartInitialised )

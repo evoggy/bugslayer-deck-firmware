@@ -34,7 +34,7 @@
 #define MAX_UART_DEVICES 2              // Max ITF bound devices
 #define MAX_UART_PROFILES 4             // Max UARTS
 #define CDC_UART_LED_FLASH_TIME 750     // LED Blink time
-#define CDC_BUFFER_SZ 256
+#define CDC_BUFFER_SZ 4096
 
 // Non-hw/Vendor code solution allow uart to write special sequence to switch on boot 
 // ( not recommended option as can trigger with enough random data )
@@ -95,9 +95,9 @@ typedef struct CDCUartInstance_t
     queue_t freeRxQueue;    
     uint32_t bufferOverflow;    
 
-    uint16_t buffer[CDC_BUFFER_SZ];
-    uint32_t readingBuffer;
-    uint32_t writingBuffer;    
+    uint8_t buffer[CDC_BUFFER_SZ];
+    volatile uint32_t readingBuffer;
+    volatile uint32_t writingBuffer;    
 
     uint32_t lastActivityTimeRx;
     uint32_t lastActivityTimeTx;
