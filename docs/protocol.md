@@ -186,6 +186,9 @@ stream format is unaffected.
 > i2c xfer <addr> <hex|-> <n>
                              < i2c ok data=<hex>  | err i2c nak | err i2c timeout
 > i2c recover                < i2c ok recover sda=1
+> mux uart|usb|off           < mux ok usb uart2=off
+> drive IO_1..IO_4 low|release
+                             < drive ok IO_3=low
 > uart 1|2 on|off            < uart ok 1=on baud=230400
                              | err no VCOM on the port: ... | err a Crazyflie powers the port ...
 ```
@@ -201,6 +204,21 @@ missing (TX idles high and would back-power VCOM-only decks). Capture keeps
 seeing both lines. `stat`'s fourth line: `stat uart1=on uart1_baud=230400
 uart1_dropped=0 uart2=off ...`; dropped counts RX bytes lost to a full ring or
 a UART FIFO overrun. RX bytes are thrown away while the host has the port closed.
+
+**USB on TX2/RX2.** `mux usb` flips U11 (TS3USB221A) so the port's TX2/RX2 connect
+to port 4 of the deck's hub as USB Full Speed (TX2 = D-, RX2 = D+), for decks
+with a USB MCU there, e.g. the Flow 3.0's RP2350. It turns the UART2 bridge off;
+`uart 2 on` is refused until `mux uart`. `mux off` disconnects both legs (OE
+high); `mux uart` releases both control pins to their straps (the power-on
+default). Refused with a Crazyflie on the port, and switched back to `uart` if
+one appears. While on `usb`, capture's TX2/RX2 bits read the disconnected UART
+leg, not the port.
+
+**Holding IO pins low.** `drive IO_n low` pulls IO_1..IO_4 low (open drain,
+never high), e.g. a deck MCU's BOOT line: the Flow 3.0 has its RP2350's QSPI_SS
+on IO_3, so `drive IO_3 low` plus a reset brings up its bootrom. IO_1, IO_2 and
+IO_4 are also probe port SWD3. Standalone only; released if a Crazyflie
+appears. `stat` shows `mux=` and `low=` (`-` or e.g. `IO_3`).
 
 `i2c xfer` writes the hex bytes (`-` for none), then reads `n` with a repeated
 START; up to 512 bytes each way. The master is off at boot and after `i2c off`,

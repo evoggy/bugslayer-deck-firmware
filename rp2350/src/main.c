@@ -23,7 +23,7 @@
 #include "i2c_master.h"
 #include "uart_bridge.h"
 
-#define FW_VERSION "0.6.0"
+#define FW_VERSION "0.7.0"
 
 static char s_serial[PICO_UNIQUE_BOARD_ID_SIZE_BYTES * 2 + 1];
 
@@ -63,7 +63,7 @@ static void board_init(void) {
     }
 
     // The USB/UART mux pins stay inputs: the straps (R32 up, R13 down) select
-    // the UART leg with the mux enabled, which is the safe state.
+    // the UART leg with the mux enabled, which is the safe state (mux_set()).
 
     // CF presence. Input only - driving it low would short the port VCC rail
     // through U13. The rail floats when U13 is off, hence the pull-down.
@@ -105,6 +105,47 @@ static void pull_off(void) {
     gpio_set_dir(PIN_EXT_I2C_PULL_EN, GPIO_IN);
 }
 
+// TS3USB221A (U11) between the port's TX2/RX2 and either the RP2350's UART2
+// (2D, the strapped default) or the hub's port 4 (1D, USB Full Speed for decks
+// with a USB MCU on TX2 = D-, RX2 = D+). Straps: R32 pulls S high (UART), R13
+// pulls OE low (enabled); releasing both pins returns to that default.
+typedef enum { MUX_UART, MUX_USB, MUX_OFF } mux_t;
+static mux_t s_mux = MUX_UART;
+static const char *const MUX_NAMES[] = {"uart", "usb", "off"};
+
+static void mux_set(mux_t m) {
+    if (m == MUX_USB) uart_bridge_set(1, false);   // UART2's pins leave the port
+    gpio_init(PIN_USB_UART_MUX_SEL);
+    gpio_init(PIN_USB_UART_MUX_NEN);
+    gpio_disable_pulls(PIN_USB_UART_MUX_SEL);
+    gpio_disable_pulls(PIN_USB_UART_MUX_NEN);
+    if (m == MUX_USB) {
+        gpio_put(PIN_USB_UART_MUX_SEL, 0);
+        gpio_set_dir(PIN_USB_UART_MUX_SEL, GPIO_OUT);
+    } else if (m == MUX_OFF) {
+        gpio_put(PIN_USB_UART_MUX_NEN, 1);
+        gpio_set_dir(PIN_USB_UART_MUX_NEN, GPIO_OUT);
+    }
+    s_mux = m;
+}
+
+// IO_1..IO_4 driven low on request (a deck's BOOT or RUN line), open drain:
+// low or released, never high. IO_1/IO_2/IO_4 are also probe port SWD3.
+static const uint DRIVE_PINS[] = {PIN_IO_1, PIN_IO_2, PIN_IO_3, PIN_IO_4};
+static uint s_driven;   // bit n = IO_(n+1) held low
+
+static void drive_set(uint i, bool low) {
+    uint pin = DRIVE_PINS[i];
+    if (low) {
+        gpio_put(pin, 0);
+        gpio_set_dir(pin, GPIO_OUT);
+        s_driven |= 1u << i;
+    } else {
+        gpio_set_dir(pin, GPIO_IN);   // back to the plain input board_init() made
+        s_driven &= ~(1u << i);
+    }
+}
+
 // VCOM went away under the pull-ups (a Crazyflie switched off): let go.
 // Not bulletproof: the pull-ups can back-feed a switched-off Crazyflie's VCC
 // through its own I2C pull-ups and hold the sense high.
@@ -114,8 +155,16 @@ static void port_interlock_poll(void) {
     // and the `pwr` reply show it.
     bool vcom = port_vcom_present();
     if (pull_is_on() && !vcom) pull_off();
+    bool cf = crazyflie_present();
     for (uint i = 0; i < UART_BRIDGE_PORTS; i++) {
-        if (uart_bridge_on(i) && (!vcom || crazyflie_present())) uart_bridge_set(i, false);
+        if (uart_bridge_on(i) && (!vcom || cf)) uart_bridge_set(i, false);
+    }
+    // A Crazyflie's STM32 owns TX2/RX2 and the IO pins.
+    if (cf && s_mux == MUX_USB) mux_set(MUX_UART);
+    if (cf) {
+        for (uint i = 0; i < count_of(DRIVE_PINS); i++) {
+            if (s_driven & (1u << i)) drive_set(i, false);
+        }
     }
 }
 
@@ -155,6 +204,10 @@ static void cmd_help(void) {
     puts("                        write the bytes (- for none), repeated START, read n;");
     puts("                        up to 512 each way -> i2c ok data=<hex>");
     puts("  i2c recover           clock SCL until SDA is released, then STOP");
+    puts("  mux uart|usb|off      TX2/RX2 to UART2 (default), to the hub's port 4 as USB");
+    puts("                        (D- = TX2, D+ = RX2; standalone only), or disconnected");
+    puts("  drive IO_1..IO_4 low|release");
+    puts("                        hold a deck's BOOT/RUN line low (standalone only)");
     puts("  uart 1|2 on|off       bridge the CF's UART1/UART2 to CDC port 1/2 (standalone");
     puts("                        only, needs VCOM): the deck drives TX and reads RX like");
     puts("                        the Crazyflie; the rate follows the port's line coding");
@@ -181,10 +234,18 @@ static void cmd_stat(void) {
            fx2_counter_running() ? "running" : "stopped",
            (unsigned long long)fx2_counter_words(),
            gpio_get(PIN_EXT_VCC_SENSE));
-    printf("stat vcc_en=%d vcom_en=%d vcom=%d pull=%d i2c=%s i2c_rate=%lu\n",
+    printf("stat vcc_en=%d vcom_en=%d vcom=%d pull=%d i2c=%s i2c_rate=%lu mux=%s low=",
            gpio_get_out_level(PIN_EXT_VCC_EN), gpio_get_out_level(PIN_EXT_VCOM_EN),
            port_vcom_present(), pull_is_on(),
-           i2cm_enabled() ? "on" : "off", (unsigned long)i2cm_rate());
+           i2cm_enabled() ? "on" : "off", (unsigned long)i2cm_rate(), MUX_NAMES[s_mux]);
+    if (!s_driven) putchar('-');
+    for (uint i = 0, first = 1; i < count_of(DRIVE_PINS); i++) {
+        if (s_driven & (1u << i)) {
+            printf("%sIO_%u", first ? "" : ",", i + 1);
+            first = 0;
+        }
+    }
+    putchar('\n');
     printf("stat");
     for (uint i = 0; i < UART_BRIDGE_PORTS; i++) {
         printf(" uart%u=%s uart%u_baud=%lu uart%u_dropped=%lu", i + 1,
@@ -192,6 +253,42 @@ static void cmd_stat(void) {
                i + 1, (unsigned long)uart_bridge_dropped(i));
     }
     putchar('\n');
+}
+
+static const char *const ERR_CF_OWNS =
+    "err a Crazyflie powers the port and its STM32 owns TX2/RX2 and IO_1-4; standalone only";
+
+// `mux uart|usb|off`
+static void cmd_mux(char *a1) {
+    int m = !a1 ? -1 : !strcmp(a1, "uart") ? MUX_UART : !strcmp(a1, "usb") ? MUX_USB
+          : !strcmp(a1, "off") ? MUX_OFF : -1;
+    if (m < 0) {
+        puts("err usage: mux uart|usb|off");
+        return;
+    }
+    if (m == MUX_USB && crazyflie_present()) {
+        puts(ERR_CF_OWNS);
+        return;
+    }
+    mux_set((mux_t)m);
+    printf("mux ok %s uart2=%s\n", MUX_NAMES[m], uart_bridge_on(1) ? "on" : "off");
+}
+
+// `drive IO_n low|release`
+static void cmd_drive(char *a1, char *a2) {
+    uint i = a1 && !strncmp(a1, "IO_", 3) && a1[3] >= '1' && a1[3] <= '4' && !a1[4]
+           ? (uint)(a1[3] - '1') : 0xff;
+    bool low = a2 && !strcmp(a2, "low");
+    if (i == 0xff || !a2 || (!low && strcmp(a2, "release"))) {
+        puts("err usage: drive IO_1|IO_2|IO_3|IO_4 low|release");
+        return;
+    }
+    if (low && crazyflie_present()) {
+        puts(ERR_CF_OWNS);
+        return;
+    }
+    drive_set(i, low);
+    printf("drive ok %s=%s\n", a1, a2);
 }
 
 // `uart 1|2 on|off`
@@ -210,6 +307,10 @@ static void cmd_uart(char *a1, char *a2) {
     if (on && !port_vcom_present()) {
         puts("err no VCOM on the port: `pwr vcom on` first (unpowered decks would be "
              "back-powered through TX)");
+        return;
+    }
+    if (on && n == 2 && s_mux != MUX_UART) {
+        puts("err TX2/RX2 are switched away from the UART: `mux uart` first");
         return;
     }
     uart_bridge_set(n - 1, on);
@@ -409,6 +510,10 @@ static void handle(char *line) {
         cmd_i2c(a1, a2, a3, a4);
     } else if (!strcmp(cmd, "uart")) {
         cmd_uart(a1, a2);
+    } else if (!strcmp(cmd, "mux")) {
+        cmd_mux(a1);
+    } else if (!strcmp(cmd, "drive")) {
+        cmd_drive(a1, a2);
     } else if (!strcmp(cmd, "pins")) {
         static const char *names[16] = {"IO_1", "IO_2", "IO_3", "IO_4", "MISO", "OW", "SCK",
                                         "MOSI", "WKUP", "N_IO_1", "TX2", "RX2", "TX1", "RX1",
