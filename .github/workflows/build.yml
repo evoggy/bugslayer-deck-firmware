@@ -1,0 +1,62 @@
+# Build the RP2350 firmware (the FX2 image is inside it, from rp2350/src/fx2_image.h)
+# on every push and PR; on a v* tag, also publish a GitHub release with
+# the UF2 (bsly update downloads it from there).
+name: Build
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+
+permissions:
+  contents: write   # gh release create
+
+env:
+  PICO_SDK_VERSION: "2.2.0"
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: false   # libfx2 is only needed to rebuild the FX2 image
+          fetch-depth: 0   # tags, for git describe
+
+      - name: Toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake ninja-build gcc-arm-none-eabi libnewlib-arm-none-eabi build-essential
+
+      - name: Pico SDK
+        run: |
+          git clone --depth 1 -b "$PICO_SDK_VERSION" https://github.com/raspberrypi/pico-sdk.git "$RUNNER_TEMP/pico-sdk"
+          git -C "$RUNNER_TEMP/pico-sdk" submodule update --init --depth 1 lib/tinyusb
+          echo "PICO_SDK_PATH=$RUNNER_TEMP/pico-sdk" >> "$GITHUB_ENV"
+
+      - name: Version
+        run: |
+          if [[ "$GITHUB_REF_TYPE" == tag ]]; then v="${GITHUB_REF_NAME#v}"
+          else v="$(git describe --tags --match 'v[0-9]*' --always --dirty | sed 's/^v//')"; fi
+          echo "FW_VERSION=$v" >> "$GITHUB_ENV"
+
+      - name: Build
+        run: |
+          cmake -S rp2350 -B build -G Ninja -DFW_VERSION="$FW_VERSION"
+          cmake --build build
+          mkdir dist
+          cp build/bugslayer_deck.uf2 "dist/bugslayer-rp2350-$FW_VERSION.uf2"
+          cp build/bugslayer_deck.elf "dist/bugslayer-rp2350-$FW_VERSION.elf"
+          (cd dist && sha256sum * > SHA256SUMS)
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bugslayer-rp2350-${{ env.FW_VERSION }}
+          path: dist/
+
+      - name: Release
+        if: github.ref_type == 'tag'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" dist/* --title "Bugslayer deck RP2350 $GITHUB_REF_NAME" --generate-notes

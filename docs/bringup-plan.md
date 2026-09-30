@@ -56,9 +56,9 @@ FX2 takes IFCLK up to 48 MHz, which is 192 MHz at 4 cycles/byte.
 flash, USB routing through the CH334 and BOOTSEL recovery.
 → *Pass: a CDC port enumerates and prints; BOOTSEL re-flashes over USB.*
 
-**0b. RP2040 probe.** Flash `rp2040/` over the RP2040's BOOTSEL (SW2). It enumerates as
-`35F0:DB11` with four CMSIS-DAP interfaces, one per SWD port. See
-[../rp2040/README.md](../rp2040/README.md).
+**0b. RP2040 probe.** Flash the probe firmware (repository `bugslayer-probe-firmware`, formerly
+`rp2040/` here) over the RP2040's BOOTSEL (SW2). It enumerates as `35F0:DB11` with four
+CMSIS-DAP interfaces, one per SWD port.
 → *Pass: `probe-rs list` shows four probes, and `probe-rs info --probe 35f0:db11-0` sees the
 RP2350. From then on the RP2350 can be flashed over SWD0 instead of BOOTSEL.* (Until
 2026-09-30 the RP2350 was the last port, SWD4 = `db11-3`; the results table below uses the old

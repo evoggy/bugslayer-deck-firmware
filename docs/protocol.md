@@ -171,7 +171,8 @@ stream format is unaffected.
 
 ```
 > ping                       < pong
-> ver                        < ver rp2350=0.1.0 fx2=0.1.0 hw=v1
+> ver                        < ver rp2350=0.8.0 fx2_image=3388 hw=v1
+> bootsel                    < bootsel ok        (then reboots into the RP2350 USB bootloader)
 > id                         < id serial=E66038B7134C2F27
 > stat                       < stat armed=1 busy=1 aborted=0 sink=fx2 session=7 blocks=120345 ...
 > arm <rate_hz> [pins|counter] [usb|fx2]

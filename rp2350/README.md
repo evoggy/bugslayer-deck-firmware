@@ -82,6 +82,15 @@ probe-rs download --probe 35f0:db11-0 --chip RP235x build/bugslayer_deck.elf
 probe-rs reset    --probe 35f0:db11-0 --chip RP235x
 ```
 
+The version is the latest `v*` tag from `git describe` at configure time (re-run cmake to
+refresh it), or `-DFW_VERSION=...`; `ver` reports it.
+
+**Releases.** Pushing a tag `vX.Y.Z` builds `bugslayer-rp2350-X.Y.Z.uf2` (plus the ELF and
+`SHA256SUMS`) in GitHub Actions (`.github/workflows/build.yml`) and publishes it as a release.
+`bsly update` installs it: `bootsel` reboots the RP2350 into its USB bootloader and bsly
+copies the UF2 to the `RP2350` drive. Firmware older than `bootsel` needs SW2 held while
+plugging USB in (that also puts the RP2040 in its bootloader).
+
 The on-board RP2040 probe's SWD0 flashes the RP2350 directly, with no BOOTSEL needed. Resetting
 the RP2350 also resets the FX2 (FX_RESET# falls back to its pull-down), so RAM-loaded FX2
 firmware has to be loaded again. Verified against pico-sdk 2.2.0 and arm-none-eabi-gcc 13.2.

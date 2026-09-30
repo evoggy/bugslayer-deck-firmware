@@ -11,6 +11,7 @@
 #include <string.h>
 
 #include "hardware/gpio.h"
+#include "pico/bootrom.h"
 #include "pico/stdlib.h"
 #include "pico/unique_id.h"
 
@@ -23,7 +24,6 @@
 #include "i2c_master.h"
 #include "uart_bridge.h"
 
-#define FW_VERSION "0.7.0"
 
 static char s_serial[PICO_UNIQUE_BOARD_ID_SIZE_BYTES * 2 + 1];
 
@@ -175,10 +175,20 @@ static void update_leds(void) {
     gpio_put(LED_STREAMING, fx2_counter_running() || cs.busy);
 }
 
+// `bootsel`: late enough that the reply has gone out over USB.
+static int64_t reboot_to_bootsel(alarm_id_t id, void *user_data) {
+    (void)id;
+    (void)user_data;
+    reset_usb_boot(0, 0);   // the RP2350 drive, for a UF2 update (bsly update)
+    return 0;
+}
+
 static void cmd_help(void) {
     puts("commands:");
     puts("  ping                  -> pong");
     puts("  ver                   firmware version");
+    puts("  bootsel               reboot into the USB bootloader (RP2350 drive) for a UF2");
+    puts("                        update; port power and the FX2 go down with it");
     puts("  id                    board serial (shared with the FX2 later)");
     puts("  stat                  capture, FX2 link and board state");
     puts("  arm <rate_hz> [pins|counter] [usb|fx2] [spi]");
@@ -395,6 +405,9 @@ static void handle(char *line) {
     } else if (!strcmp(cmd, "ver")) {
         printf("ver rp2350=%s fx2_image=%lu hw=v1\n", FW_VERSION,
                (unsigned long)fx2_boot_image_len());
+    } else if (!strcmp(cmd, "bootsel")) {
+        puts("bootsel ok");
+        add_alarm_in_ms(100, reboot_to_bootsel, NULL, true);
     } else if (!strcmp(cmd, "id")) {
         printf("id serial=%s\n", s_serial);
     } else if (!strcmp(cmd, "stat")) {

@@ -4,8 +4,9 @@ Firmware for the **Bugslayer deck**, a Crazyflie 2.x expansion deck that works e
 standalone (drive decks with no Crazyflie present) or as a shim in the stack (passively
 sniff every bus while the Crazyflie runs).
 
-This repository holds **all three firmwares that ship on the board**, plus minimal host-side
-tools used to bring the hardware up. The real capture/display application lives in a separate
+This repository holds the **RP2350 and FX2 firmware** (the FX2 image ships inside the
+RP2350's), plus minimal host-side tools used to bring the hardware up. The on-board RP2040
+debug probe has its own repository, `bugslayer-probe-firmware` (split out on 2026-09-30). The real capture/display application lives in a separate
 repository — anything in `host/` here is a test harness, not a product.
 
 Hardware: `crazyflie-exp-electronics/bugslayer` (KiCad).
@@ -62,7 +63,6 @@ interface table and how to find each port.
 | Directory | What | Toolchain |
 |---|---|---|
 | `rp2350/` | Sniffing, control plane, FX2 boot + clocking | Pico SDK / CMake / arm-none-eabi |
-| `rp2040/` | 4-port CMSIS-DAP probe | Pico SDK / CMake / arm-none-eabi, FreeRTOS (submodule) |
 | `fx2/` | 8051 slave-FIFO firmware for the CBM9002A | SDCC + libfx2 |
 | `host/` | Minimal bring-up + verification tools | Python / libusb |
 | `docs/` | Protocol, pin map, bring-up plan | — |
@@ -105,6 +105,6 @@ enumerate behind the hub, and the RP2350 → FX2 → PC pipe carries 37.5 MB/s w
 | Firmware | Status |
 |---|---|
 | `rp2350/` | CDC command loop, FX2 self-boot, PIO pin sampler, block stream into its own USB or the FX2. **16.67 Msps through the FX2 with zero loss** |
-| `rp2040/` | 4-port CMSIS-DAP (MultiProbe port). **Runs**: four probes listed, SWD0 flashes the RP2350 |
+| RP2040 | moved to `bugslayer-probe-firmware`. **Runs**: four probes listed, SWD0 flashes the RP2350 |
 | `fx2/` | stage 1 — slave FIFO + WinUSB descriptors. **Passes stage 1 on hardware** (RAM-loaded) |
 | `host/` | `bslyctl.py`, `fx2_counter_test.py`, `stage1.sh`; see [host/README.md](host/README.md) |
