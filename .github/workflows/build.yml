@@ -1,6 +1,6 @@
 # Build the RP2350 firmware (the FX2 image is inside it, from rp2350/src/fx2_image.h)
 # on every push and PR; on a version tag (0.8.0, no v), also publish a GitHub release with
-# the UF2 (bsly update downloads it from there).
+# the UF2 (bscli update downloads it from there).
 name: Build
 
 on:

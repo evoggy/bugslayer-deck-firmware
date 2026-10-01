@@ -87,7 +87,7 @@ refresh it), or `-DFW_VERSION=...`; `ver` reports it.
 
 **Releases.** Pushing a tag `X.Y.Z` (no `v`) builds `bugslayer-rp2350-X.Y.Z.uf2` (plus the ELF and
 `SHA256SUMS`) in GitHub Actions (`.github/workflows/build.yml`) and publishes it as a release.
-`bsly update` installs it: `bootsel` reboots the RP2350 into its USB bootloader and bsly
+`bscli update` installs it: `bootsel` reboots the RP2350 into its USB bootloader and bscli
 copies the UF2 to the `RP2350` drive. Firmware older than `bootsel` needs SW2 held while
 plugging USB in (that also puts the RP2040 in its bootloader).
 

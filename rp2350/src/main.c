@@ -179,7 +179,7 @@ static void update_leds(void) {
 static int64_t reboot_to_bootsel(alarm_id_t id, void *user_data) {
     (void)id;
     (void)user_data;
-    reset_usb_boot(0, 0);   // the RP2350 drive, for a UF2 update (bsly update)
+    reset_usb_boot(0, 0);   // the RP2350 drive, for a UF2 update (bscli update)
     return 0;
 }
 
@@ -311,7 +311,7 @@ static void cmd_uart(char *a1, char *a2) {
     bool on = !strcmp(a2, "on");
     if (on && crazyflie_present()) {
         puts("err a Crazyflie powers the port and its STM32 drives TX1/TX2; the bridge is "
-             "standalone only (use capture/`bsly uart` to sniff)");
+             "standalone only (use capture/`bscli uart` to sniff)");
         return;
     }
     if (on && !port_vcom_present()) {

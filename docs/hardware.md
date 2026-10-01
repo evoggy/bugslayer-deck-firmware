@@ -183,7 +183,7 @@ unbound (select with DAP vendor command 0x92).
 
 The STM32 drives SWO (PB3 = JTDO/TRACESWO) **only while its debug port is in SWD mode**. It
 powers up in JTAG mode, and OpenOCD sends SWD-to-JTAG when it exits, so SWO goes silent after
-every OpenOCD session even though the ITM keeps running. `bsly swo` switches it back through
+every OpenOCD session even though the ITM keeps running. `bscli swo` switches it back through
 SWD1 at start and whenever a debugger releases the port. The Crazyflie firmware sets up the
 ITM and TPIU itself with `CONFIG_DEBUG_PRINT_ON_SWO` (2 Mbaud default).
 
