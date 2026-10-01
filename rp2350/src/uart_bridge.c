@@ -18,6 +18,7 @@ typedef struct {
     uint irq;
     uint8_t cdc;                 // TinyUSB CDC instance
     bool on;
+    bool dtr;                    // Host DTR, last seen
     cdc_line_coding_t coding;    // the host's, applied while on
     volatile uint32_t head;      // written by the IRQ
     uint32_t tail;               // written by the main loop
@@ -119,12 +120,11 @@ void uart_bridge_poll(void) {
             uart_putc_raw(p->uart, b);
         }
 
-        // RX pin -> host. Nothing is kept for a port nobody has open.
+        // RX pin -> host, whatever the host does with DTR: bootloader tools
+        // (the QCC flasher) hold it low while they use the port. What nobody
+        // reads waits in the ring until it overflows, and a terminal that
+        // opens the port starts afresh, see tud_cdc_line_state_cb().
         uint32_t head = p->head;
-        if (!tud_cdc_n_connected(p->cdc)) {
-            p->tail = head;
-            continue;
-        }
         while (p->tail != head) {
             uint32_t at = p->tail & (RING_SIZE - 1);
             uint32_t n = head - p->tail;
@@ -135,6 +135,19 @@ void uart_bridge_poll(void) {
         }
         tud_cdc_n_write_flush(p->cdc);
     }
+}
+
+// DTR going high is a terminal opening the port: give it what arrives from
+// now on rather than what came in while nobody was reading.
+void tud_cdc_line_state_cb(uint8_t itf, bool dtr, bool rts) {
+    (void)rts;
+    if (itf == 0 || itf > UART_BRIDGE_PORTS) return;
+    port_t *p = &s_ports[itf - 1];
+    if (dtr && !p->dtr) {
+        p->tail = p->head;
+        tud_cdc_n_write_clear(p->cdc);
+    }
+    p->dtr = dtr;
 }
 
 // The host opened a port or changed its settings. CDC 0 is the control
